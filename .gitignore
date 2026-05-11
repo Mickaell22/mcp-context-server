@@ -1,5 +1,6 @@
 # MD del proyecto (documentacion interna)
 *.md
+!README.md
 
 # Variables de entorno
 .env
@@ -9,6 +10,7 @@
 .env.*
 
 # Python
+.venv/
 __pycache__/
 *.py[cod]
 *.pyo
