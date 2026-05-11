@@ -16,11 +16,11 @@ Servidor MCP que actua como memoria inteligente de proyectos para Claude Code. I
 ## Como funciona
 
 ```
-Claude Code (laptop / Kali en SSD portable)
+Claude Code (cualquier maquina)
         |
-        | MCP protocol via Tailscale
+        | MCP protocol (local o via Tailscale)
         v
-openclaw-server (casa) — i7 3ra gen, 16GB DDR3, ethernet fija
+Servidor MCP (tu maquina o servidor dedicado)
         |
         | Indexador de codigo (CPU only, all-MiniLM-L6-v2)
         | ChromaDB persistente en disco
@@ -69,7 +69,7 @@ DeepSeek Flash API  ────────────────────
 ## Instalacion
 
 ```bash
-git clone https://github.com/mickaell/mcp-context-backend
+git clone https://github.com/tu-usuario/mcp-context-backend
 cd mcp-context-backend/server
 
 python3 -m venv .venv
