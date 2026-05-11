@@ -17,9 +17,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if not valid:
         return {"error": reason}
 
-    files_indexed = indexer.index_project(project["id"], project["path"])
+    files_indexed, file_list = indexer.index_project(project["id"], project["path"])
 
     return {
         "project": project_name,
         "files_indexed": files_indexed,
+        "files": file_list,
     }

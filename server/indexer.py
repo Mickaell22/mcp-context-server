@@ -59,7 +59,7 @@ def _chunk_file(file_path: str) -> list[str]:
     return chunks
 
 
-def index_project(project_id: int, project_path: str) -> int:
+def index_project(project_id: int, project_path: str) -> tuple[int, list[str]]:
     collection = _get_collection()
     model = _get_model()
 
@@ -118,5 +118,6 @@ def index_project(project_id: int, project_path: str) -> int:
     db.log_indexed_files(project_id, indexed_files)
     db.update_last_indexed(project_id)
 
+    file_paths = [f["file_path"] for f in indexed_files]
     logger.info("Indexados %d archivos, %d chunks para proyecto %d", len(indexed_files), chunk_counter, project_id)
-    return len(indexed_files)
+    return len(indexed_files), file_paths

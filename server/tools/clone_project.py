@@ -15,10 +15,11 @@ async def handle(args: dict, session_id: int | None) -> dict:
     project_id = db.insert_project(name, path, repo_url)
     security.add_allowed_path(path)
 
-    files_indexed = indexer.index_project(project_id, path)
+    files_indexed, file_list = indexer.index_project(project_id, path)
 
     return {
         "project": name,
         "path": path,
         "files_indexed": files_indexed,
+        "files": file_list,
     }

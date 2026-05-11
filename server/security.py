@@ -9,6 +9,7 @@ BLOCKED_EXTENSIONS = {".env", ".pem", ".key", ".cert", ".p12", ".pfx"}
 BLOCKED_FILENAMES = {
     ".env", ".env.local", ".env.production", ".env.development",
     "secrets.json", "credentials.json", "serviceAccount.json",
+    "CLAUDE.md",
 }
 
 BLOCKED_DIRS = {
@@ -19,9 +20,11 @@ BLOCKED_DIRS = {
 ALLOWED_EXTENSIONS = {
     ".py", ".js", ".ts", ".jsx", ".tsx",
     ".java", ".cs", ".go", ".rs",
-    ".html", ".css",
+    ".dart", ".kt", ".swift", ".rb", ".php",
+    ".c", ".h", ".cpp", ".cc", ".cxx", ".hpp",
+    ".html", ".css", ".scss", ".sass",
     ".md", ".txt", ".json", ".yaml", ".yml",
-    ".sql",
+    ".sql", ".sh", ".bash",
 }
 
 # Rutas permitidas — se cargan desde PostgreSQL al iniciar y se actualizan al clonar
