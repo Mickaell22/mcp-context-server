@@ -6,7 +6,7 @@ import retriever
 import deepseek_client
 from db import log_query
 
-AUDIT_QUERIES: list[tuple[str, str]] = [
+BACKEND_QUERIES: list[tuple[str, str]] = [
     ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens"),
     ("multitenancy",    "aislamiento entre tenants, organizacion, empresa, cliente, datos compartidos"),
     ("rate_limiting",   "rate limiting, throttling, limites de uso, cuotas, burst"),
@@ -17,7 +17,27 @@ AUDIT_QUERIES: list[tuple[str, str]] = [
     ("api_contracts",   "endpoints REST, contratos de API, serializacion, versionado, paginacion"),
 ]
 
-ALL_CATEGORIES = {k for k, _ in AUDIT_QUERIES}
+FRONTEND_QUERIES: list[tuple[str, str]] = [
+    ("accessibility",      "ARIA labels, aria-label, aria-hidden, role, tabIndex, alt text, keyboard navigation, focus, screen reader"),
+    ("performance",        "useMemo, useCallback, React.memo, lazy, Suspense, dynamic import, re-renders, bundle size, code splitting"),
+    ("state_management",   "useState, useReducer, useContext, Context, Redux, Zustand, prop drilling, global state, side effects"),
+    ("seo",                "meta tags, title, description, Open Graph, og:image, canonical, structured data, semantic HTML, h1, h2"),
+    ("component_design",   "component size, props interface, TypeScript types, PropTypes, reusability, single responsibility, composition"),
+    ("error_handling",     "error boundary, ErrorBoundary, try catch, loading state, empty state, skeleton, fallback UI, null check"),
+    ("deprecated",         "TODO, FIXME, HACK, @ts-ignore, @ts-expect-error, any type, eslint-disable, deprecated, legacy"),
+    ("tests",              "React Testing Library, render, fireEvent, userEvent, Playwright, Cypress, snapshot, screen.getBy"),
+]
+
+_BACKEND_MAP = dict(BACKEND_QUERIES)
+_FRONTEND_MAP = dict(FRONTEND_QUERIES)
+ALL_CATEGORIES = set(_BACKEND_MAP) | set(_FRONTEND_MAP)
+
+
+def _detect_project_type(project_id: int) -> str:
+    ext_counts = db.get_file_extensions(project_id)
+    frontend = sum(ext_counts.get(e, 0) for e in {".tsx", ".jsx"})
+    backend = sum(ext_counts.get(e, 0) for e in {".py", ".java", ".go", ".rs", ".cs"})
+    return "frontend" if frontend > backend else "backend"
 
 
 async def handle(args: dict, session_id: int | None) -> dict:
@@ -34,13 +54,17 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if not security.is_path_allowed(project["path"]):
         return {"error": f"Proyecto '{project_name}' no esta en la whitelist"}
 
+    project_type: str
     if requested is not None:
         invalid = set(requested) - ALL_CATEGORIES
         if invalid:
             return {"error": f"Categorias invalidas: {sorted(invalid)}. Validas: {sorted(ALL_CATEGORIES)}"}
-        queries_to_run = [(k, q) for k, q in AUDIT_QUERIES if k in requested]
+        combined = {**_BACKEND_MAP, **_FRONTEND_MAP}
+        queries_to_run = [(k, combined[k]) for k in requested if k in combined]
+        project_type = "custom"
     else:
-        queries_to_run = AUDIT_QUERIES
+        project_type = _detect_project_type(project["id"])
+        queries_to_run = FRONTEND_QUERIES if project_type == "frontend" else BACKEND_QUERIES
 
     report: dict = {}
     total_input = 0
@@ -79,6 +103,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
 
     return {
         "project": project_name,
+        "project_type": project_type,
         "categories_checked": len(queries_to_run),
         "total_tokens": total_input + total_output,
         "total_cost_usd": round(total_cost, 6),

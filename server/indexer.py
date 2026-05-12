@@ -50,13 +50,50 @@ def _file_hash(path: str) -> str:
         return hashlib.md5(f.read()).hexdigest()
 
 
-def _chunk_content(content: str) -> list[str]:
+_COMPONENT_BOUNDARY = re.compile(
+    r'^(?:export\s+(?:default\s+)?(?:async\s+)?(?:function|class|const)\b|function\s+[A-Z])'
+)
+
+
+def _chunk_tsx(lines: list[str]) -> list[list[str]] | None:
+    """Divide TSX/JSX en segmentos en límites de componente/función top-level."""
+    boundaries = [i for i, line in enumerate(lines) if _COMPONENT_BOUNDARY.match(line)]
+    if len(boundaries) < 2:
+        return None
+    segments: list[list[str]] = []
+    if boundaries[0] > 0:
+        segments.append(lines[:boundaries[0]])
+    for i, start in enumerate(boundaries):
+        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
+        segments.append(lines[start:end])
+    return segments
+
+
+def _chunk_content(content: str, rel_path: str = "") -> list[str]:
+    header = f"// {rel_path}\n" if rel_path else ""
     lines = content.splitlines(keepends=True)
+
+    ext = Path(rel_path).suffix.lower() if rel_path else ""
+    if ext in {".tsx", ".jsx"}:
+        segments = _chunk_tsx(lines)
+        if segments:
+            result = []
+            for seg in segments:
+                if len(seg) <= CHUNK_SIZE:
+                    result.append(header + "".join(seg))
+                else:
+                    start = 0
+                    while start < len(seg):
+                        end = min(start + CHUNK_SIZE, len(seg))
+                        result.append(header + "".join(seg[start:end]))
+                        start += CHUNK_SIZE - CHUNK_OVERLAP
+            return result
+
     chunks = []
     start = 0
     while start < len(lines):
         end = min(start + CHUNK_SIZE, len(lines))
-        chunks.append("".join(lines[start:end]))
+        chunks.append(header + "".join(lines[start:end]))
         start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
 
@@ -167,7 +204,7 @@ def index_project(
             except OSError:
                 continue
 
-            chunks = _chunk_content(content)
+            chunks = _chunk_content(content, rel_path)
             if not chunks:
                 continue
 

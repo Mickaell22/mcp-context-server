@@ -183,3 +183,18 @@ def load_project_paths() -> list[str]:
     with cursor() as cur:
         cur.execute("SELECT path FROM projects")
         return [row["path"] for row in cur.fetchall()]
+
+
+def get_file_extensions(project_id: int) -> dict[str, int]:
+    """Retorna {extension: count} de archivos indexados del proyecto."""
+    import os
+    with cursor() as cur:
+        cur.execute(
+            "SELECT file_path FROM indexed_files WHERE project_id = %s",
+            (project_id,),
+        )
+        counts: dict[str, int] = {}
+        for row in cur.fetchall():
+            ext = os.path.splitext(row["file_path"])[1].lower()
+            counts[ext] = counts.get(ext, 0) + 1
+        return counts
