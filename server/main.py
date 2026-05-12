@@ -10,7 +10,7 @@ from mcp import types
 import db
 import security
 from config import LOG_LEVEL
-from tools import query_context, index_project, list_projects, clone_project
+from tools import query_context, index_project, list_projects, clone_project, get_file, register_project
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -39,12 +39,19 @@ async def list_tools() -> list[types.Tool]:
     return [
         types.Tool(
             name="query_context",
-            description="Consulta contexto relevante de un proyecto dado una pregunta en lenguaje natural.",
+            description="Consulta contexto relevante de uno o varios proyectos dado una pregunta en lenguaje natural.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "query": {"type": "string", "description": "Pregunta o descripcion de lo que se busca"},
-                    "project": {"type": "string", "description": "Nombre del proyecto a consultar"},
+                    "project": {
+                        "description": "Nombre del proyecto o lista de proyectos para queries cross-repo",
+                        "oneOf": [
+                            {"type": "string"},
+                            {"type": "array", "items": {"type": "string"}},
+                        ],
+                    },
+                    "code_only": {"type": "boolean", "description": "Si es true, excluye archivos de documentacion (.md, .txt) y busca solo en codigo fuente"},
                 },
                 "required": ["query", "project"],
             },
@@ -76,6 +83,30 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["repo_url"],
             },
         ),
+        types.Tool(
+            name="register_project",
+            description="Registra e indexa un proyecto local en disco sin necesidad de clonarlo desde GitHub.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {"type": "string", "description": "Ruta absoluta al directorio del proyecto"},
+                    "name": {"type": "string", "description": "Nombre del proyecto (opcional, usa el nombre del directorio si se omite)"},
+                },
+                "required": ["path"],
+            },
+        ),
+        types.Tool(
+            name="get_file",
+            description="Retorna el contenido completo de un archivo especifico del indice.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre del proyecto"},
+                    "file_path": {"type": "string", "description": "Ruta relativa del archivo dentro del proyecto"},
+                },
+                "required": ["project", "file_path"],
+            },
+        ),
     ]
 
 
@@ -96,6 +127,12 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
     elif name == "clone_project":
         result = await clone_project.handle(arguments, session_id)
+
+    elif name == "register_project":
+        result = await register_project.handle(arguments, session_id)
+
+    elif name == "get_file":
+        result = await get_file.handle(arguments, session_id)
 
     else:
         result = {"error": f"Tool desconocido: {name}"}
