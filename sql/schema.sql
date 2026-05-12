@@ -27,11 +27,19 @@ CREATE TABLE IF NOT EXISTS queries (
 );
 
 CREATE TABLE IF NOT EXISTS indexed_files (
-    id          SERIAL PRIMARY KEY,
-    project_id  INTEGER REFERENCES projects(id),
-    file_path   TEXT NOT NULL,
-    file_size   INTEGER,
-    indexed_at  TIMESTAMP DEFAULT NOW()
+    id           SERIAL PRIMARY KEY,
+    project_id   INTEGER REFERENCES projects(id),
+    file_path    TEXT NOT NULL,
+    file_size    INTEGER,
+    content_hash TEXT,
+    indexed_at   TIMESTAMP DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS file_imports (
+    id           SERIAL PRIMARY KEY,
+    project_id   INTEGER REFERENCES projects(id),
+    file_path    TEXT NOT NULL,
+    import_name  TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS blocked_attempts (
@@ -46,3 +54,5 @@ CREATE INDEX IF NOT EXISTS idx_queries_session ON queries(session_id);
 CREATE INDEX IF NOT EXISTS idx_queries_created ON queries(created_at);
 CREATE INDEX IF NOT EXISTS idx_indexed_files_project ON indexed_files(project_id);
 CREATE INDEX IF NOT EXISTS idx_blocked_attempts_session ON blocked_attempts(session_id);
+CREATE INDEX IF NOT EXISTS idx_file_imports_project ON file_imports(project_id);
+CREATE INDEX IF NOT EXISTS idx_file_imports_name ON file_imports(project_id, import_name);

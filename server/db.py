@@ -105,14 +105,66 @@ def log_query(
 # ---------- indexed_files ----------
 
 def log_indexed_files(project_id: int, files: list[dict]) -> None:
-    """files: lista de {file_path, file_size}"""
+    """files: lista de {file_path, file_size, content_hash?}"""
     with cursor() as cur:
         cur.execute("DELETE FROM indexed_files WHERE project_id = %s", (project_id,))
-        psycopg2.extras.execute_values(
-            cur,
-            "INSERT INTO indexed_files (project_id, file_path, file_size) VALUES %s",
-            [(project_id, f["file_path"], f["file_size"]) for f in files],
+        if files:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO indexed_files (project_id, file_path, file_size, content_hash) VALUES %s",
+                [(project_id, f["file_path"], f["file_size"], f.get("content_hash")) for f in files],
+            )
+
+
+def get_file_hashes(project_id: int) -> dict[str, str]:
+    """Retorna {file_path: content_hash} para todos los archivos indexados del proyecto."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT file_path, content_hash FROM indexed_files WHERE project_id = %s AND content_hash IS NOT NULL",
+            (project_id,),
         )
+        return {row["file_path"]: row["content_hash"] for row in cur.fetchall()}
+
+
+# ---------- file_imports ----------
+
+def log_file_imports(project_id: int, imports: list[dict]) -> None:
+    """Reemplaza todos los imports del proyecto. imports: [{file_path, import_name}]"""
+    with cursor() as cur:
+        cur.execute("DELETE FROM file_imports WHERE project_id = %s", (project_id,))
+        if imports:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO file_imports (project_id, file_path, import_name) VALUES %s",
+                [(project_id, i["file_path"], i["import_name"]) for i in imports],
+            )
+
+
+def update_file_imports(project_id: int, file_paths: list[str], imports: list[dict]) -> None:
+    """Actualiza imports solo para los archivos dados (modo incremental)."""
+    if not file_paths:
+        return
+    with cursor() as cur:
+        cur.execute(
+            "DELETE FROM file_imports WHERE project_id = %s AND file_path = ANY(%s)",
+            (project_id, file_paths),
+        )
+        if imports:
+            psycopg2.extras.execute_values(
+                cur,
+                "INSERT INTO file_imports (project_id, file_path, import_name) VALUES %s",
+                [(project_id, i["file_path"], i["import_name"]) for i in imports],
+            )
+
+
+def find_files_importing(project_id: int, symbol: str) -> list[str]:
+    """Retorna archivos que importan el simbolo dado (busqueda case-insensitive)."""
+    with cursor() as cur:
+        cur.execute(
+            "SELECT DISTINCT file_path FROM file_imports WHERE project_id = %s AND import_name ILIKE %s ORDER BY file_path",
+            (project_id, f"%{symbol}%"),
+        )
+        return [row["file_path"] for row in cur.fetchall()]
 
 
 # ---------- blocked_attempts ----------

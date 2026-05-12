@@ -30,4 +30,5 @@ CHUNK_SIZE = 150   # lineas por chunk
 CHUNK_OVERLAP = 20
 
 # Retrieval
-TOP_K_RESULTS = 8  # fragmentos a recuperar por query
+TOP_K_RESULTS = 8   # fragmentos a recuperar por query
+MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "0.7"))  # cosine distance máximo (0=idéntico, 1=ortogonal)

@@ -10,7 +10,7 @@ from mcp import types
 import db
 import security
 from config import LOG_LEVEL
-from tools import query_context, index_project, list_projects, clone_project, get_file, register_project
+from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -58,11 +58,12 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="index_project",
-            description="Re-indexa un proyecto existente en disco. Usar cuando hay cambios en el codigo.",
+            description="Re-indexa un proyecto existente en disco. incremental=true solo procesa archivos cambiados.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "project": {"type": "string", "description": "Nombre del proyecto a indexar"},
+                    "incremental": {"type": "boolean", "description": "Si es true, solo re-indexa archivos modificados desde el ultimo index"},
                 },
                 "required": ["project"],
             },
@@ -107,6 +108,34 @@ async def list_tools() -> list[types.Tool]:
                 "required": ["project", "file_path"],
             },
         ),
+        types.Tool(
+            name="audit_project",
+            description="Corre una bateria de queries de auditoria predefinidas sobre un proyecto y genera un reporte consolidado. Categorias: security, multitenancy, rate_limiting, input_validation, error_handling, deprecated, tests, api_contracts.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre del proyecto a auditar"},
+                    "categories": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "Categorias a auditar. Si se omite, corre todas las 8 categorias.",
+                    },
+                },
+                "required": ["project"],
+            },
+        ),
+        types.Tool(
+            name="find_usages",
+            description="Busca que archivos importan o usan un simbolo, clase, funcion o modulo especifico. Requiere que el proyecto haya sido indexado con esta version del servidor.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre del proyecto"},
+                    "symbol": {"type": "string", "description": "Nombre del simbolo a buscar (clase, funcion, modulo)"},
+                },
+                "required": ["project", "symbol"],
+            },
+        ),
     ]
 
 
@@ -133,6 +162,14 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
     elif name == "get_file":
         result = await get_file.handle(arguments, session_id)
+
+    elif name == "audit_project":
+        project_name = arguments.get("project", "")
+        session_id = _get_or_create_session(project_name)
+        result = await audit_project.handle(arguments, session_id)
+
+    elif name == "find_usages":
+        result = await find_usages.handle(arguments, session_id)
 
     else:
         result = {"error": f"Tool desconocido: {name}"}

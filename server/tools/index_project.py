@@ -5,6 +5,7 @@ import indexer
 
 async def handle(args: dict, session_id: int | None) -> dict:
     project_name = args.get("project", "").strip()
+    incremental = args.get("incremental", False)
 
     if not project_name:
         return {"error": "Se requiere 'project'"}
@@ -17,10 +18,11 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if not valid:
         return {"error": reason}
 
-    files_indexed, file_list = indexer.index_project(project["id"], project["path"])
+    files_indexed, file_list = indexer.index_project(project["id"], project["path"], incremental=incremental)
 
     return {
         "project": project_name,
         "files_indexed": files_indexed,
-        "files": file_list,
+        "total_files": len(file_list),
+        "mode": "incremental" if incremental else "full",
     }

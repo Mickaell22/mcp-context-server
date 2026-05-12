@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from pathlib import Path
 
-from config import TOP_K_RESULTS
+from config import TOP_K_RESULTS, MAX_DISTANCE
 from indexer import _get_model, _get_collection
 
 logger = logging.getLogger(__name__)
@@ -53,6 +53,9 @@ def retrieve(
         results["metadatas"][0],
         results["distances"][0],
     ):
+        if dist > MAX_DISTANCE:
+            continue
+
         if code_only:
             ext = Path(meta["file_path"]).suffix.lower()
             if ext not in CODE_EXTENSIONS:
