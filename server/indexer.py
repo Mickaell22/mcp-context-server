@@ -69,6 +69,26 @@ def _chunk_tsx(lines: list[str]) -> list[list[str]] | None:
     return segments
 
 
+def _chunk_css(lines: list[str]) -> list[list[str]] | None:
+    """Divide CSS/SCSS en bloques de reglas top-level preservando :root y .dark completos."""
+    segments: list[list[str]] = []
+    current: list[str] = []
+    depth = 0
+
+    for line in lines:
+        current.append(line)
+        depth += line.count("{") - line.count("}")
+        if depth <= 0 and any(ln.strip() for ln in current):
+            segments.append(current[:])
+            current = []
+            depth = 0
+
+    if current and any(ln.strip() for ln in current):
+        segments.append(current)
+
+    return segments if len(segments) >= 2 else None
+
+
 def _chunk_content(content: str, rel_path: str = "") -> list[str]:
     header = f"// {rel_path}\n" if rel_path else ""
     lines = content.splitlines(keepends=True)
@@ -76,6 +96,21 @@ def _chunk_content(content: str, rel_path: str = "") -> list[str]:
     ext = Path(rel_path).suffix.lower() if rel_path else ""
     if ext in {".tsx", ".jsx"}:
         segments = _chunk_tsx(lines)
+        if segments:
+            result = []
+            for seg in segments:
+                if len(seg) <= CHUNK_SIZE:
+                    result.append(header + "".join(seg))
+                else:
+                    start = 0
+                    while start < len(seg):
+                        end = min(start + CHUNK_SIZE, len(seg))
+                        result.append(header + "".join(seg[start:end]))
+                        start += CHUNK_SIZE - CHUNK_OVERLAP
+            return result
+
+    if ext in {".css", ".scss", ".sass"}:
+        segments = _chunk_css(lines)
         if segments:
             result = []
             for seg in segments:

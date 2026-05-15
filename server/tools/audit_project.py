@@ -31,6 +31,7 @@ FRONTEND_QUERIES: list[tuple[str, str]] = [
     ("tests",              "React Testing Library, render, fireEvent, userEvent, Playwright, Cypress, snapshot, screen.getBy"),
     ("bundle_size",        "import pesado, lodash, moment, date-fns, bundle, tree shaking, side effects, package size, barrel exports, index re-export"),
     ("hydration",          "useEffect, useLayoutEffect, typeof window, isMounted, suppressHydrationWarning, SSR mismatch, client only, next/dynamic, ssr false, localStorage en render"),
+    ("theming",            "variables CSS, :root, .dark, tokens de diseño, contraste, color, prose, tailwind bg text border, muted foreground background, hardcoded color, hex rgb hsl"),
 ]
 
 # Estrategia de recuperación por categoría.
@@ -71,6 +72,33 @@ CATEGORY_STRATEGY: dict[str, dict] = {
             "inputs sin <label> asociado ni aria-label, "
             "jerarquía de headings rota (ej. h2 antes de h1, salto h1→h3). "
             "Indica archivo y elemento problemático."
+        ),
+    },
+    "theming": {
+        # globals.css/tailwind.config completos para ver todos los tokens definidos.
+        # import_patterns en %.css/%.scss trae chunk 0 de cada CSS (donde viven :root vars).
+        # import_patterns en %/app/%/%/pages/% trae chunk 0 de páginas (donde se usan los tokens).
+        # La búsqueda semántica complementa encontrando uso concreto de clases en componentes.
+        "structural_patterns": [
+            "%globals.css", "%globals.scss", "%globals.sass",
+            "%tailwind.config%",
+        ],
+        "import_patterns": [
+            "%.css", "%.scss", "%.sass",
+            "%/app/%", "%/pages/%",
+        ],
+        "prompt_hint": (
+            "Analiza theming y contraste. Busca: "
+            "1) Variables CSS en :root sin contraparte en .dark {} "
+            "(token sin valor en modo oscuro — el componente hereda el valor light). "
+            "2) Overrides de prose-* incompletos: si prose-pre:bg-X está definido "
+            "sin prose-pre:text-Y ni prose-pre:dark:text-Y, el texto puede contrastar "
+            "mal con el fondo personalizado. "
+            "3) Colores hardcodeados (#hex, rgb(), hsl()) fuera de variables CSS "
+            "que no se adaptan al modo oscuro. "
+            "4) Combinaciones Tailwind de bg-*/text-* de luminosidad similar en el mismo elemento "
+            "(bajo contraste). "
+            "Indica archivo y problema concreto."
         ),
     },
 }
