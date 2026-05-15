@@ -19,13 +19,15 @@ BACKEND_QUERIES: list[tuple[str, str]] = [
 
 FRONTEND_QUERIES: list[tuple[str, str]] = [
     ("accessibility",      "ARIA labels, aria-label, aria-hidden, role, tabIndex, alt text, keyboard navigation, focus, screen reader"),
-    ("performance",        "useMemo, useCallback, React.memo, lazy, Suspense, dynamic import, re-renders, bundle size, code splitting"),
+    ("performance",        "useMemo, useCallback, React.memo, lazy, Suspense, dynamic import, re-renders, code splitting, virtualization"),
     ("state_management",   "useState, useReducer, useContext, Context, Redux, Zustand, prop drilling, global state, side effects"),
     ("seo",                "meta tags, title, description, Open Graph, og:image, canonical, structured data, semantic HTML, h1, h2"),
     ("component_design",   "component size, props interface, TypeScript types, PropTypes, reusability, single responsibility, composition"),
     ("error_handling",     "error boundary, ErrorBoundary, try catch, loading state, empty state, skeleton, fallback UI, null check"),
     ("deprecated",         "TODO, FIXME, HACK, @ts-ignore, @ts-expect-error, any type, eslint-disable, deprecated, legacy"),
     ("tests",              "React Testing Library, render, fireEvent, userEvent, Playwright, Cypress, snapshot, screen.getBy"),
+    ("bundle_size",        "import pesado, lodash, moment, date-fns, bundle, tree shaking, side effects, package size, barrel exports, index re-export"),
+    ("hydration",          "useEffect, useLayoutEffect, typeof window, isMounted, suppressHydrationWarning, SSR mismatch, client only, next/dynamic, ssr false, localStorage en render"),
 ]
 
 _BACKEND_MAP = dict(BACKEND_QUERIES)
