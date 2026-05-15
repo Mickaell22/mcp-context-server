@@ -185,6 +185,19 @@ def load_project_paths() -> list[str]:
         return [row["path"] for row in cur.fetchall()]
 
 
+def get_files_by_path_patterns(project_id: int, patterns: list[str]) -> list[str]:
+    """Retorna file_paths que coinciden con cualquiera de los patrones ILIKE."""
+    if not patterns:
+        return []
+    with cursor() as cur:
+        conditions = " OR ".join(["file_path ILIKE %s"] * len(patterns))
+        cur.execute(
+            f"SELECT DISTINCT file_path FROM indexed_files WHERE project_id = %s AND ({conditions}) ORDER BY file_path",
+            [project_id, *patterns],
+        )
+        return [row["file_path"] for row in cur.fetchall()]
+
+
 def get_file_extensions(project_id: int) -> dict[str, int]:
     """Retorna {extension: count} de archivos indexados del proyecto."""
     import os
