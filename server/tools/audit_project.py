@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import logging
 import db
 import security
 import retriever
 import deepseek_client
 from db import log_query
+
+logger = logging.getLogger(__name__)
 
 BACKEND_QUERIES: list[tuple[str, str]] = [
     ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens"),
@@ -146,49 +149,54 @@ async def handle(args: dict, session_id: int | None) -> dict:
     total_cost = 0.0
 
     for category, query in queries_to_run:
-        strategy = CATEGORY_STRATEGY.get(category, {})
+        try:
+            strategy = CATEGORY_STRATEGY.get(category, {})
 
-        chunks: list[dict] = []
+            chunks: list[dict] = []
 
-        if not strategy.get("semantic_disabled"):
-            chunks = retriever.retrieve(query, project["id"], code_only=True)
+            if not strategy.get("semantic_disabled"):
+                chunks = retriever.retrieve(query, project["id"], code_only=True)
 
-        structural_pats = strategy.get("structural_patterns", [])
-        if structural_pats:
-            chunks = _dedup(chunks + _structural_chunks(project["id"], structural_pats))
+            structural_pats = strategy.get("structural_patterns", [])
+            if structural_pats:
+                chunks = _dedup(chunks + _structural_chunks(project["id"], structural_pats))
 
-        import_pats = strategy.get("import_patterns", [])
-        if import_pats:
-            chunks = _dedup(chunks + _structural_chunks(project["id"], import_pats, first_chunk_only=True))
+            import_pats = strategy.get("import_patterns", [])
+            if import_pats:
+                chunks = _dedup(chunks + _structural_chunks(project["id"], import_pats, first_chunk_only=True))
 
-        if not chunks:
-            report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
-            continue
+            if not chunks:
+                report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
+                continue
 
-        hint = strategy.get("prompt_hint", "")
-        prefix = f"INSTRUCCIONES ESPECIALES: {hint}\n\n" if hint else ""
-        audit_query = f"{prefix}Auditoria de {category} — busca problemas, ausencias o patrones relacionados con: {query}"
-        context, in_tok, out_tok, cost = deepseek_client.compress_context(audit_query, chunks)
+            hint = strategy.get("prompt_hint", "")
+            prefix = f"INSTRUCCIONES ESPECIALES: {hint}\n\n" if hint else ""
+            audit_query = f"{prefix}Auditoria de {category} — busca problemas, ausencias o patrones relacionados con: {query}"
+            context, in_tok, out_tok, cost = deepseek_client.compress_context(audit_query, chunks)
 
-        files = list(dict.fromkeys(c["file_path"] for c in chunks))
-        report[category] = {
-            "findings": context,
-            "files_referenced": files,
-            "tokens": in_tok + out_tok,
-        }
-        total_input += in_tok
-        total_output += out_tok
-        total_cost += cost
+            files = list(dict.fromkeys(c["file_path"] for c in chunks))
+            report[category] = {
+                "findings": context,
+                "files_referenced": files,
+                "tokens": in_tok + out_tok,
+            }
+            total_input += in_tok
+            total_output += out_tok
+            total_cost += cost
 
-        if session_id is not None:
-            log_query(
-                session_id=session_id,
-                query_text=f"[audit:{category}] {query}",
-                response_text=context,
-                input_tokens=in_tok,
-                output_tokens=out_tok,
-                cost_usd=cost,
-            )
+            if session_id is not None:
+                log_query(
+                    session_id=session_id,
+                    query_text=f"[audit:{category}] {query}",
+                    response_text=context,
+                    input_tokens=in_tok,
+                    output_tokens=out_tok,
+                    cost_usd=cost,
+                )
+
+        except Exception as exc:
+            logger.error("Fallo en categoria %s: %s", category, exc, exc_info=True)
+            report[category] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": []}
 
     return {
         "project": project_name,

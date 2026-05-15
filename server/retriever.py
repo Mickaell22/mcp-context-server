@@ -78,7 +78,7 @@ def get_file_chunks(project_id: int, file_path: str) -> list[dict]:
     collection = _get_collection()
 
     results = collection.get(
-        where={"project_id": project_id, "file_path": file_path},
+        where={"$and": [{"project_id": {"$eq": project_id}}, {"file_path": {"$eq": file_path}}]},
         include=["documents", "metadatas"],
     )
 
