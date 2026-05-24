@@ -20,7 +20,7 @@ Claude Code (cualquier maquina)
         |
         | MCP protocol (local o via Tailscale)
         v
-Servidor MCP (tu maquina o servidor dedicado)
+Servidor MCP (local en Kali SSD o en openclaw-server)
         |
         | Indexador de codigo (CPU only, all-MiniLM-L6-v2)
         | ChromaDB persistente en disco
@@ -30,7 +30,8 @@ Servidor MCP (tu maquina o servidor dedicado)
 DeepSeek Flash API  ──────────────────────────────────────────► PostgreSQL (Railway)
                                                                          ^
                                                                          |
-                                                                Next.js Dashboard (Railway)
+                                                                Next.js Dashboard
+                                                                ia.novamicktools.com
 ```
 
 1. Claude Code llama a `query_context` con una pregunta en lenguaje natural
@@ -43,12 +44,16 @@ DeepSeek Flash API  ────────────────────
 
 ## Tools MCP
 
-| Tool | Descripcion |
-|---|---|
-| `query_context` | Consulta contexto de un proyecto por pregunta en lenguaje natural |
-| `index_project` | Re-indexa un proyecto existente en disco |
-| `list_projects` | Lista los proyectos disponibles |
-| `clone_project` | Clona un repo de GitHub e indexa automaticamente |
+| Tool | Parametros | Descripcion |
+|---|---|---|
+| `query_context` | `query`, `project` (str o list), `code_only` (bool) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. |
+| `index_project` | `project` | Re-indexa un proyecto existente por nombre. Modo incremental por defecto. |
+| `list_projects` | — | Lista todos los proyectos registrados en la BD. |
+| `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
+| `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
+| `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
+| `audit_project` | `project`, `categories` (opcional) | Corre hasta 10 queries de auditoria. Autodetecta frontend vs backend. |
+| `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
 
 ---
 
@@ -58,19 +63,21 @@ DeepSeek Flash API  ────────────────────
 |---|---|
 | Protocolo | MCP SDK (Python) |
 | Embeddings | sentence-transformers — all-MiniLM-L6-v2 (CPU) |
-| Vector store | ChromaDB con PersistentClient |
+| Vector store | ChromaDB con PersistentClient (disco local) |
 | Compresion de contexto | DeepSeek Flash via SDK Anthropic |
 | Clonado de repos | GitPython |
+| Grafo de imports | ast (Python) + regex (JS/TS) |
 | Base de datos | PostgreSQL en Railway |
-| Acceso remoto | Tailscale |
+| Acceso remoto | Tailscale (openclaw-server) |
+| Dashboard | Next.js en Railway → ia.novamicktools.com |
 
 ---
 
 ## Instalacion
 
 ```bash
-git clone https://github.com/tu-usuario/mcp-context-backend
-cd mcp-context-backend/server
+git clone https://github.com/mickaell/mcp-context-server
+cd mcp-context-server/server
 
 python3 -m venv .venv
 source .venv/bin/activate
@@ -83,7 +90,7 @@ Copia `.env.example` a `.env` y completa las variables:
 cp .env.example .env
 ```
 
-Aplica el schema en tu PostgreSQL de Railway:
+Aplica el schema en tu PostgreSQL de Railway (solo la primera vez):
 
 ```bash
 psql $DATABASE_URL -f ../sql/schema.sql
@@ -92,7 +99,7 @@ psql $DATABASE_URL -f ../sql/schema.sql
 Levanta el servidor:
 
 ```bash
-python main.py
+.venv/bin/python main.py
 ```
 
 ---
@@ -103,6 +110,40 @@ python main.py
 claude mcp add --scope user mcp-context -- /ruta/a/server/.venv/bin/python /ruta/a/server/main.py
 ```
 
+Para verificar que esta corriendo:
+
+```bash
+claude mcp list
+```
+
+---
+
+## Instalacion como servicio (systemd)
+
+Para que arranque automaticamente en openclaw-server:
+
+```ini
+# /etc/systemd/system/mcp-context.service
+[Unit]
+Description=MCP Context Server
+After=network.target
+
+[Service]
+User=mickaell
+WorkingDirectory=/ruta/a/mcp-context-server/server
+ExecStart=/ruta/a/server/.venv/bin/python main.py
+Restart=on-failure
+EnvironmentFile=/ruta/a/server/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable mcp-context
+sudo systemctl start mcp-context
+```
+
 ---
 
 ## Variables de entorno
@@ -111,10 +152,11 @@ claude mcp add --scope user mcp-context -- /ruta/a/server/.venv/bin/python /ruta
 |---|---|
 | `DEEPSEEK_API_KEY` | API key de DeepSeek |
 | `GITHUB_TOKEN` | Token de GitHub (scope: `repo`) para repos privados |
-| `DATABASE_URL` | PostgreSQL en Railway (usar la URL publica) |
+| `DATABASE_URL` | PostgreSQL en Railway (URL publica para acceso externo) |
 | `PROJECTS_BASE_PATH` | Directorio base donde se clonan los repos |
 | `CHROMA_PERSIST_PATH` | Directorio donde ChromaDB guarda los vectores en disco |
-| `LOG_LEVEL` | Nivel de log (INFO por defecto) |
+| `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
+| `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `0.7`) |
 
 ---
 
@@ -132,6 +174,7 @@ claude mcp add --scope user mcp-context -- /ruta/a/server/.venv/bin/python /ruta
 ## Seguridad
 
 - Solo opera dentro de rutas explicitamente permitidas (whitelist dinamica desde PostgreSQL)
-- Bloquea archivos sensibles: `.env`, `.pem`, `.key`, `secrets.json`, etc.
-- No ejecuta ningun comando del sistema — la unica excepcion es `git clone` via GitPython
-- No expuesto a internet — acceso exclusivo via Tailscale
+- Bloquea archivos sensibles: `.env`, `.pem`, `.key`, `secrets.json`, `CLAUDE.md`, etc.
+- Extensiones indexadas: `.py .js .ts .jsx .tsx .java .go .rs .dart .kt .swift .rb .php .c .cpp .h .html .css .scss .md .json .yaml .sql .sh`
+- No ejecuta ningun comando del sistema — unica excepcion es `git clone` via GitPython
+- No expuesto a internet — acceso local o via Tailscale
