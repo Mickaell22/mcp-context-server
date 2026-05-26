@@ -52,7 +52,7 @@ DeepSeek Flash API  ────────────────────
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
 | `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
-| `audit_project` | `project`, `categories` (opcional) | Corre hasta 10 queries de auditoria. Autodetecta frontend vs backend. |
+| `audit_project` | `project`, `categories` (opcional) | Auditoria automatica de codigo. Autodetecta frontend vs backend. Categorias backend: security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests. Frontend: accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming. Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
 | `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
 
 ---
@@ -76,7 +76,7 @@ DeepSeek Flash API  ────────────────────
 ## Instalacion
 
 ```bash
-git clone https://github.com/mickaell/mcp-context-server
+git clone https://github.com/Mickaell22/mcp-context-server
 cd mcp-context-server/server
 
 python3 -m venv .venv
@@ -100,6 +100,24 @@ Levanta el servidor:
 
 ```bash
 .venv/bin/python main.py
+```
+
+### Paths en openclaw-server
+
+```
+/home/mickaell/Escritorio/Proyectos MICKAELL/mcp-context-server/
+└── server/
+    ├── main.py              # Entry point
+    ├── tools/                # Tools MCP
+    │   ├── audit_project.py  # Auditoria con fallback DeepSeek
+    │   ├── query_context.py  # Busqueda semantica
+    │   ├── register_project.py
+    │   ├── index_project.py
+    │   └── ...
+    ├── indexer.py            # Indexacion en ChromaDB
+    ├── retriever.py          # Recuperacion semantica
+    ├── deepseek_client.py    # Cliente DeepSeek Flash
+    └── db.py                 # PostgreSQL (Railway)
 ```
 
 ---
