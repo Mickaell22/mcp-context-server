@@ -10,14 +10,14 @@ from db import log_query
 logger = logging.getLogger(__name__)
 
 BACKEND_QUERIES: list[tuple[str, str]] = [
-    ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens"),
-    ("multitenancy",    "aislamiento entre tenants, organizacion, empresa, cliente, datos compartidos"),
-    ("rate_limiting",   "rate limiting, throttling, limites de uso, cuotas, burst"),
-    ("input_validation","validacion de entrada, sanitizacion, inyeccion SQL, XSS, CSRF"),
-    ("error_handling",  "manejo de errores, excepciones no capturadas, logging, monitoring, alertas"),
-    ("deprecated",      "codigo obsoleto, TODO, FIXME, HACK, deprecated, legacy, workaround"),
-    ("tests",           "tests unitarios, cobertura, fixtures, mocks, integracion, casos de prueba"),
-    ("api_contracts",   "endpoints REST, contratos de API, serializacion, versionado, paginacion"),
+    ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens, API keys, secrets hardcodeados, variables de entorno"),
+    ("error_handling",  "manejo de errores, excepciones no capturadas, logging, monitoring, alertas, try/except, fallos silenciosos"),
+    ("code_quality",    "codigo repetido, funciones muy largas, complejidad ciclomatica, principios SOLID, modularidad, acoplamiento"),
+    ("deprecated",      "codigo obsoleto, TODO, FIXME, HACK, deprecated, legacy, workaround, print debugging"),
+    ("config_secrets",   "credenciales hardcodeadas, API keys en codigo, .env, configuracion insegura, informacion sensible"),
+    ("imports",         "imports no utilizados, dependencias circulares, imports relativos, organizacion de imports"),
+    ("io_operations",   "archivos abiertos sin cerrar, timeouts de red, manejo de APIs externas, descargas, operaciones bloqueantes"),
+    ("tests",           "tests unitarios, cobertura, fixtures, mocks, integracion, casos de prueba, assertions"),
 ]
 
 FRONTEND_QUERIES: list[tuple[str, str]] = [
@@ -194,6 +194,18 @@ async def handle(args: dict, session_id: int | None) -> dict:
                 chunks = _dedup(chunks + _structural_chunks(project["id"], import_pats, first_chunk_only=True))
 
             if not chunks:
+                # Fallback: get general overview of all files
+                all_chunks = retriever.retrieve("codigo, funciones, clases, estructura general del proyecto", project["id"])
+                if all_chunks:
+                    chunks = all_chunks[:5]  # Use top 5 most relevant
+                    fallback_query = f"Auditoria general de {category} — revisa todo el codigo disponible y busca problemas de calidad, seguridad, o mejoras potenciales relacionadas con: {query}"
+                    context, in_tok, out_tok, cost = deepseek_client.compress_context(fallback_query, chunks)
+                    files = list(dict.fromkeys(c["file_path"] for c in chunks))
+                    report[category] = {"findings": context, "files_referenced": files, "tokens": in_tok + out_tok}
+                    total_input += in_tok
+                    total_output += out_tok
+                    total_cost += cost
+                    continue
                 report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
                 continue
 
