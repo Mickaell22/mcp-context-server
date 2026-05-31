@@ -35,4 +35,4 @@ CHUNK_OVERLAP = 20
 
 # Retrieval
 TOP_K_RESULTS = 8   # fragmentos a recuperar por query
-MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "0.7"))  # cosine distance máximo (0=idéntico, 1=ortogonal)
+MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "1.2"))  # cosine distance máximo (0=idéntico, 2=opuesto). MiniLM NL->código suele dar 0.6-1.1
