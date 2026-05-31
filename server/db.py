@@ -61,6 +61,28 @@ def update_last_indexed(project_id: int) -> None:
         )
 
 
+def delete_project(project_id: int) -> None:
+    """Borra el proyecto y todas sus filas dependientes en orden de FK.
+
+    No hay ON DELETE CASCADE en el esquema, asi que se borra manualmente:
+    queries y blocked_attempts (via sessions) -> sessions -> indexed_files
+    -> file_imports -> projects. Todo en una sola transaccion.
+    """
+    with cursor() as cur:
+        cur.execute(
+            "DELETE FROM queries WHERE session_id IN (SELECT id FROM sessions WHERE project_id = %s)",
+            (project_id,),
+        )
+        cur.execute(
+            "DELETE FROM blocked_attempts WHERE session_id IN (SELECT id FROM sessions WHERE project_id = %s)",
+            (project_id,),
+        )
+        cur.execute("DELETE FROM sessions WHERE project_id = %s", (project_id,))
+        cur.execute("DELETE FROM indexed_files WHERE project_id = %s", (project_id,))
+        cur.execute("DELETE FROM file_imports WHERE project_id = %s", (project_id,))
+        cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
+
+
 # ---------- sessions ----------
 
 def create_session(project_id: int) -> int:

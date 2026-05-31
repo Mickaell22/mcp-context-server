@@ -176,6 +176,12 @@ def _extract_imports(full_path: str, content: str, rel_path: str) -> list[dict]:
     return imports
 
 
+def delete_project_chunks(project_id: int) -> None:
+    """Borra todos los chunks de un proyecto de la coleccion de ChromaDB."""
+    collection = _get_collection()
+    collection.delete(where={"project_id": project_id})
+
+
 def _delete_file_chunks(collection, project_id: int, rel_path: str) -> None:
     try:
         collection.delete(

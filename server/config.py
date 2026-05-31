@@ -7,6 +7,10 @@ load_dotenv()
 DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
 DEEPSEEK_MODEL = "deepseek-chat"
+DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
+DEEPSEEK_MAX_RETRIES = int(os.getenv("DEEPSEEK_MAX_RETRIES", "2"))
+# Limite de caracteres del fallback en crudo cuando DeepSeek no responde
+COMPRESS_FALLBACK_MAX_CHARS = int(os.getenv("COMPRESS_FALLBACK_MAX_CHARS", "12000"))
 
 # GitHub
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")

@@ -40,6 +40,10 @@ def add_allowed_path(path: str) -> None:
     _allowed_paths.add(os.path.realpath(path))
 
 
+def remove_allowed_path(path: str) -> None:
+    _allowed_paths.discard(os.path.realpath(path))
+
+
 def is_path_allowed(path: str) -> bool:
     real = os.path.realpath(path)
     return any(real == p or real.startswith(p + os.sep) for p in _allowed_paths)

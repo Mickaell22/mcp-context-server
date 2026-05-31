@@ -10,7 +10,7 @@ from mcp import types
 import db
 import security
 from config import LOG_LEVEL
-from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages
+from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages, delete_project
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -52,6 +52,7 @@ async def list_tools() -> list[types.Tool]:
                         ],
                     },
                     "code_only": {"type": "boolean", "description": "Si es true, excluye archivos de documentacion (.md, .txt) y busca solo en codigo fuente"},
+                    "top_k": {"type": "integer", "description": "Numero de fragmentos a recuperar (opcional). Por defecto 8; subelo para proyectos grandes."},
                 },
                 "required": ["query", "project"],
             },
@@ -125,6 +126,17 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="delete_project",
+            description="Elimina un proyecto del indice: borra sus chunks de ChromaDB, sus filas en PostgreSQL y lo saca de la whitelist. Accion irreversible.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre del proyecto a eliminar"},
+                },
+                "required": ["project"],
+            },
+        ),
+        types.Tool(
             name="find_usages",
             description="Busca que archivos importan o usan un simbolo, clase, funcion o modulo especifico. Requiere que el proyecto haya sido indexado con esta version del servidor.",
             inputSchema={
@@ -167,6 +179,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
         project_name = arguments.get("project", "")
         session_id = _get_or_create_session(project_name)
         result = await audit_project.handle(arguments, session_id)
+
+    elif name == "delete_project":
+        result = await delete_project.handle(arguments, session_id)
 
     elif name == "find_usages":
         result = await find_usages.handle(arguments, session_id)

@@ -21,11 +21,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if not name:
         name = os.path.basename(path)
 
-    valid, reason = security.validate_project_path(path)
-    if not valid:
-        # si esta fuera de PROJECTS_BASE_PATH lo permitimos igual pero lo registramos
-        security.add_allowed_path(path)
-
+    # Politica de registro: permitimos rutas fuera de PROJECTS_BASE_PATH, pero
+    # toda ruta registrada queda en la whitelist (en memoria) para que luego sea
+    # consultable e indexable. No usamos validate_project_path aqui a proposito:
+    # no queremos rechazar rutas fuera de la base, solo autorizarlas explicitamente.
     project_id = db.insert_project(name, path)
     security.add_allowed_path(path)
 

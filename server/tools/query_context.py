@@ -4,6 +4,7 @@ import db
 import security
 import retriever
 import deepseek_client
+from config import TOP_K_RESULTS
 from db import log_blocked_attempt, log_query
 
 
@@ -11,6 +12,13 @@ async def handle(args: dict, session_id: int | None) -> dict:
     query = args.get("query", "").strip()
     project_arg = args.get("project", "")
     code_only = args.get("code_only", False)
+
+    # top_k opcional: para proyectos grandes 8 chunks puede quedarse corto
+    top_k = args.get("top_k") or TOP_K_RESULTS
+    try:
+        top_k = max(1, int(top_k))
+    except (TypeError, ValueError):
+        top_k = TOP_K_RESULTS
 
     if not query or not project_arg:
         return {"error": "Se requieren 'query' y 'project'"}
@@ -29,7 +37,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
         projects.append(p)
 
     project_ids = [p["id"] for p in projects]
-    chunks = retriever.retrieve(query, project_ids, code_only=code_only)
+    chunks = retriever.retrieve(query, project_ids, top_k=top_k, code_only=code_only)
 
     if not chunks:
         return {"context": "", "files_referenced": [], "tokens_used": 0}
