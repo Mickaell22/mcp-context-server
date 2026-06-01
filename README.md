@@ -46,7 +46,7 @@ DeepSeek Flash API  ────────────────────
 
 | Tool | Parametros | Descripcion |
 |---|---|---|
-| `query_context` | `query`, `project` (str o list), `code_only` (bool) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. |
+| `query_context` | `query`, `project` (str o list), `code_only` (bool), `top_k` (int, opcional) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. `top_k` por defecto 8; subelo en proyectos grandes. |
 | `index_project` | `project` | Re-indexa un proyecto existente por nombre. Modo incremental por defecto. |
 | `list_projects` | — | Lista todos los proyectos registrados en la BD. |
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
@@ -174,7 +174,7 @@ sudo systemctl start mcp-context
 | `PROJECTS_BASE_PATH` | Directorio base donde se clonan los repos |
 | `CHROMA_PERSIST_PATH` | Directorio donde ChromaDB guarda los vectores en disco |
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
-| `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `0.7`) |
+| `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `1.2`). Con `all-MiniLM-L6-v2`, queries en lenguaje natural contra codigo suelen dar distancias de 0.6–1.1; valores menores a 1.0 filtran demasiado y devuelven contexto vacio. |
 
 ---
 
@@ -186,6 +186,29 @@ sudo systemctl start mcp-context
 | Output | $0.28 / 1M tokens |
 | Query promedio (~5k input, ~1k output) | ~$0.001 |
 | 1000 queries al mes | ~$1.00 |
+
+---
+
+## Arquitectura multi-maquina
+
+PostgreSQL es **compartido en la nube** entre todas las maquinas que usen el servidor. ChromaDB es **local de cada maquina** (`CHROMA_PERSIST_PATH`).
+
+Consecuencias importantes:
+
+- `list_projects` muestra **todos** los proyectos registrados desde cualquier maquina.
+- `query_context`, `audit_project` y `get_file` solo funcionan para proyectos indexados **en esa maquina**. Un proyecto que aparece en la lista pero devuelve contexto vacio normalmente fue indexado en otra maquina — no esta corrupto.
+- Para usar un proyecto en una nueva maquina, hay que re-indexarlo localmente aunque ya aparezca en la lista: `index_project` (si el path en Postgres coincide con la ruta local) o `register_project` (si el path es distinto).
+- **No usar `delete_project` para limpiar proyectos de otra maquina**: borra la fila de PostgreSQL compartido y rompe el indice en todas las maquinas que lo usen. `delete_project` es irreversible y afecta a todos.
+
+### Re-indexar por script (sin iniciar el servidor)
+
+Si se llama `indexer.index_project()` directamente desde un script, la whitelist en memoria esta vacia y `is_file_allowed()` rechaza todos los archivos — se indexan 0 archivos mientras el modo full borra los chunks previos. Hay que poblar la whitelist antes:
+
+```python
+import security, indexer
+security.add_allowed_path("/ruta/al/proyecto")
+indexer.index_project(project_id, "/ruta/al/proyecto")
+```
 
 ---
 
