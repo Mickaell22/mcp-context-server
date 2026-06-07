@@ -175,6 +175,9 @@ sudo systemctl start mcp-context
 | `CHROMA_PERSIST_PATH` | Directorio donde ChromaDB guarda los vectores en disco |
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
 | `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `1.2`). Con `all-MiniLM-L6-v2`, queries en lenguaje natural contra codigo suelen dar distancias de 0.6–1.1; valores menores a 1.0 filtran demasiado y devuelven contexto vacio. |
+| `DEEPSEEK_TIMEOUT` | Timeout en segundos para llamadas a DeepSeek (default: `60.0`). El SDK Anthropic usa 10 min por defecto, demasiado para una tool MCP — bajarlo evita que `query_context`/`audit_project` se cuelguen. |
+
+Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
 
 ---
 

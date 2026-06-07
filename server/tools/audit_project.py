@@ -5,7 +5,6 @@ import db
 import security
 import retriever
 import deepseek_client
-from db import log_query
 
 logger = logging.getLogger(__name__)
 
@@ -225,7 +224,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
             total_cost += cost
 
             if session_id is not None:
-                log_query(
+                db.log_query(
                     session_id=session_id,
                     query_text=f"[audit:{category}] {query}",
                     response_text=context,

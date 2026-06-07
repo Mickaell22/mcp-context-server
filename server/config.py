@@ -3,12 +3,24 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _require(key: str) -> str:
+    val = os.environ.get(key)
+    if not val:
+        raise RuntimeError(
+            f"Falta la variable de entorno requerida: {key}. "
+            f"Configurala en .env o en el entorno antes de iniciar el servidor."
+        )
+    return val
+
+
 # DeepSeek
-DEEPSEEK_API_KEY = os.environ["DEEPSEEK_API_KEY"]
+DEEPSEEK_API_KEY = _require("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
 DEEPSEEK_MODEL = "deepseek-chat"
 DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
 DEEPSEEK_MAX_RETRIES = int(os.getenv("DEEPSEEK_MAX_RETRIES", "2"))
+DEEPSEEK_TIMEOUT = float(os.getenv("DEEPSEEK_TIMEOUT", "60.0"))
 # Limite de caracteres del fallback en crudo cuando DeepSeek no responde
 COMPRESS_FALLBACK_MAX_CHARS = int(os.getenv("COMPRESS_FALLBACK_MAX_CHARS", "12000"))
 
@@ -16,11 +28,11 @@ COMPRESS_FALLBACK_MAX_CHARS = int(os.getenv("COMPRESS_FALLBACK_MAX_CHARS", "1200
 GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # PostgreSQL
-DATABASE_URL = os.environ["DATABASE_URL"]
+DATABASE_URL = _require("DATABASE_URL")
 
 # Rutas locales
-PROJECTS_BASE_PATH = os.environ["PROJECTS_BASE_PATH"]
-CHROMA_PERSIST_PATH = os.environ["CHROMA_PERSIST_PATH"]
+PROJECTS_BASE_PATH = _require("PROJECTS_BASE_PATH")
+CHROMA_PERSIST_PATH = _require("CHROMA_PERSIST_PATH")
 
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")

@@ -11,6 +11,7 @@ from config import (
     DEEPSEEK_MODEL,
     DEEPSEEK_MAX_TOKENS,
     DEEPSEEK_MAX_RETRIES,
+    DEEPSEEK_TIMEOUT,
     COMPRESS_FALLBACK_MAX_CHARS,
 )
 
@@ -29,6 +30,7 @@ def _get_client() -> anthropic.Anthropic:
         _client = anthropic.Anthropic(
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL,
+            timeout=DEEPSEEK_TIMEOUT,
         )
     return _client
 
