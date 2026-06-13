@@ -5,10 +5,29 @@ import db
 import security
 import retriever
 import deepseek_client
+from config import AUDIT_TOP_K
 
 logger = logging.getLogger(__name__)
 
+# Pista compartida back/front: la búsqueda semántica engancha mal los bugs de
+# lógica (matchea comentarios antes que un `if x is not None`), así que la guía
+# explícita de anti-patrones es lo que da recall en esta categoría.
+_CORRECTNESS_HINT = (
+    "Caza BUGS de lógica reales, no estilo. Reporta: "
+    "1) updates parciales que ignoran null/empty (ej. `if data.campo is not None: model.campo = data.campo` "
+    "impide limpiar el campo cuando el cliente manda null). "
+    "2) etiquetas/conteos que no coinciden con el valor calculado (ej. mostrar 'subtotal (N items)' "
+    "usando el total de items cuando el monto solo suma los que cumplen una condición). "
+    "3) condiciones invertidas o con operador equivocado (</<=, and/or, == vs is). "
+    "4) off-by-one, slicing o paginación incorrectos. "
+    "5) early returns o except que silencian datos/errores. "
+    "6) comparaciones de igualdad con float, o mezcla Decimal/float. "
+    "7) variables mutables compartidas / closures obsoletos. "
+    "Indica archivo, función y el snippet exacto."
+)
+
 BACKEND_QUERIES: list[tuple[str, str]] = [
+    ("correctness",     "bug de logica, actualizacion parcial que ignora null, condicion invertida, off-by-one, valor calculado que no coincide con su etiqueta, comparacion is/==, manejo de None vs vacio, return temprano que silencia datos"),
     ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens, API keys, secrets hardcodeados, variables de entorno"),
     ("error_handling",  "manejo de errores, excepciones no capturadas, logging, monitoring, alertas, try/except, fallos silenciosos"),
     ("code_quality",    "codigo repetido, funciones muy largas, complejidad ciclomatica, principios SOLID, modularidad, acoplamiento"),
@@ -20,6 +39,7 @@ BACKEND_QUERIES: list[tuple[str, str]] = [
 ]
 
 FRONTEND_QUERIES: list[tuple[str, str]] = [
+    ("correctness",        "bug de logica, valor calculado que no coincide con su etiqueta o conteo, condicion invertida, estado obsoleto, dependencias de useEffect incorrectas, off-by-one, comparacion equivocada, manejo de null/undefined"),
     ("accessibility",      "ARIA labels, aria-label, aria-hidden, role, tabIndex, alt text, keyboard navigation, focus, screen reader"),
     ("performance",        "useMemo, useCallback, React.memo, lazy, Suspense, dynamic import, re-renders, code splitting, virtualization"),
     ("state_management",   "useState, useReducer, useContext, Context, Redux, Zustand, prop drilling, global state, side effects"),
@@ -39,6 +59,16 @@ FRONTEND_QUERIES: list[tuple[str, str]] = [
 # import_patterns: igual pero solo chunk 0 de cada archivo (donde viven los imports).
 # prompt_hint: texto prepuesto al prompt de auditoría para guiar al modelo.
 CATEGORY_STRATEGY: dict[str, dict] = {
+    "correctness": {
+        # Semántica sola tiene recall bajo para bugs de lógica; sumamos barrido
+        # estructural de las carpetas donde vive la lógica de negocio para que las
+        # funciones/handlers lleguen completos al modelo.
+        "structural_patterns": [
+            "%/routers/%", "%/routes/%", "%/controllers/%", "%/api/%",
+            "%/services/%", "%/pages/%", "%/views/%", "%/hooks/%",
+        ],
+        "prompt_hint": _CORRECTNESS_HINT,
+    },
     "seo": {
         # El objeto `metadata` y `generateMetadata` viven en page.tsx/layout.tsx.
         # La búsqueda semántica a veces trae solo imports; la recuperación estructural
@@ -144,6 +174,83 @@ def _dedup(chunks: list[dict]) -> list[dict]:
     return result
 
 
+# Patrones de archivos relevantes para el contrato API según el rol del proyecto.
+_FRONTEND_API_PATTERNS = ["%/api/%", "%api.js", "%api.ts", "%/services/%", "%/lib/api%"]
+_FRONTEND_API_QUERY = "llamadas axios o fetch a endpoints del backend, metodos HTTP, payload o body enviado, parametros, headers"
+_BACKEND_ROUTE_PATTERNS = ["%/routers/%", "%/routes/%", "%/controllers/%", "%/api/%", "%/endpoints/%", "%/views/%"]
+_BACKEND_ROUTE_QUERY = "endpoints REST, request body, response model, campos opcionales, validacion de entrada, manejo de null, update parcial"
+
+_CONTRACT_INSTRUCTIONS = (
+    "Estás comparando un FRONTEND y un BACKEND del mismo sistema. Verifica el CONTRATO "
+    "entre el cliente API del frontend y los endpoints del backend. Cada fragmento lleva "
+    "su repo entre corchetes en el encabezado. Reporta SOLO desajustes concretos:\n"
+    "1) Campos que el frontend envía como null o '' para LIMPIAR un valor pero el backend "
+    "ignora con guards tipo `if x is not None` / `if x:` (el campo nunca se borra).\n"
+    "2) Nombres de campo que no coinciden entre el request del front y lo que lee el back.\n"
+    "3) Tipos incompatibles (string vs number, formato de fecha, array vs objeto).\n"
+    "4) Endpoints o métodos HTTP que el front llama y el back no define (o al revés).\n"
+    "5) Campos requeridos por el back que el front no envía.\n"
+    "Para cada hallazgo indica el archivo del front Y el del back implicados."
+)
+
+# Tope de chunks para acotar costo del contrato (front + back combinados).
+_CONTRACT_MAX_CHUNKS = 40
+
+
+def _gather_contract_chunks(project: dict, patterns: list[str], query: str, role: str) -> list[dict]:
+    """Recupera chunks relevantes al contrato de un proyecto (semántico + estructural)
+    y prefija el repo en file_path para que el modelo distinga front de back."""
+    pid = project["id"]
+    semantic = retriever.retrieve(query, pid, top_k=AUDIT_TOP_K, code_only=True)
+    structural = _structural_chunks(pid, patterns)
+    combined = _dedup(semantic + structural)
+    tag = f"[{role}:{project['name']}]"
+    for c in combined:
+        c["file_path"] = f"{tag} {c['file_path']}"
+    return combined
+
+
+async def _contract_audit(project_a: dict, project_b: dict, session_id: int | None) -> dict:
+    """Audita el contrato API entre dos proyectos pareados (frontend + backend)."""
+    type_a = _detect_project_type(project_a["id"])
+    type_b = _detect_project_type(project_b["id"])
+
+    # decidir cuál es frontend y cuál backend; si empatan, A=front por convención
+    if type_b == "frontend" and type_a != "frontend":
+        frontend, backend = project_b, project_a
+    else:
+        frontend, backend = project_a, project_b
+
+    front_chunks = _gather_contract_chunks(frontend, _FRONTEND_API_PATTERNS, _FRONTEND_API_QUERY, "FRONTEND")
+    back_chunks = _gather_contract_chunks(backend, _BACKEND_ROUTE_PATTERNS, _BACKEND_ROUTE_QUERY, "BACKEND")
+
+    chunks = (front_chunks + back_chunks)[:_CONTRACT_MAX_CHUNKS]
+    if not chunks:
+        return {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
+
+    context, in_tok, out_tok, cost = deepseek_client.audit_context(_CONTRACT_INSTRUCTIONS, chunks)
+    files = list(dict.fromkeys(c["file_path"] for c in chunks))
+
+    if session_id is not None:
+        db.log_query(
+            session_id=session_id,
+            query_text=f"[audit:contracts] {frontend['name']} <-> {backend['name']}",
+            response_text=context,
+            input_tokens=in_tok,
+            output_tokens=out_tok,
+            cost_usd=cost,
+        )
+
+    return {
+        "findings": context,
+        "files_referenced": files,
+        "tokens": in_tok + out_tok,
+        "_cost": cost,
+        "_in": in_tok,
+        "_out": out_tok,
+    }
+
+
 async def handle(args: dict, session_id: int | None) -> dict:
     project_name = args.get("project", "").strip()
     requested = args.get("categories", None)
@@ -157,6 +264,16 @@ async def handle(args: dict, session_id: int | None) -> dict:
 
     if not security.is_path_allowed(project["path"]):
         return {"error": f"Proyecto '{project_name}' no esta en la whitelist"}
+
+    # paired_with: proyecto hermano (front/back) para auditar el contrato API entre ambos
+    paired_name = (args.get("paired_with") or "").strip()
+    paired_project = None
+    if paired_name:
+        paired_project = db.get_project_by_name(paired_name)
+        if not paired_project:
+            return {"error": f"Proyecto pareado '{paired_name}' no encontrado"}
+        if not security.is_path_allowed(paired_project["path"]):
+            return {"error": f"Proyecto pareado '{paired_name}' no esta en la whitelist"}
 
     project_type: str
     if requested is not None:
@@ -182,7 +299,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
             chunks: list[dict] = []
 
             if not strategy.get("semantic_disabled"):
-                chunks = retriever.retrieve(query, project["id"], code_only=True)
+                chunks = retriever.retrieve(query, project["id"], top_k=AUDIT_TOP_K, code_only=True)
 
             structural_pats = strategy.get("structural_patterns", [])
             if structural_pats:
@@ -197,8 +314,8 @@ async def handle(args: dict, session_id: int | None) -> dict:
                 all_chunks = retriever.retrieve("codigo, funciones, clases, estructura general del proyecto", project["id"])
                 if all_chunks:
                     chunks = all_chunks[:5]  # Use top 5 most relevant
-                    fallback_query = f"Auditoria general de {category} — revisa todo el codigo disponible y busca problemas de calidad, seguridad, o mejoras potenciales relacionadas con: {query}"
-                    context, in_tok, out_tok, cost = deepseek_client.compress_context(fallback_query, chunks)
+                    fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
+                    context, in_tok, out_tok, cost = deepseek_client.audit_context(fallback_instr, chunks)
                     files = list(dict.fromkeys(c["file_path"] for c in chunks))
                     report[category] = {"findings": context, "files_referenced": files, "tokens": in_tok + out_tok}
                     total_input += in_tok
@@ -209,9 +326,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
                 continue
 
             hint = strategy.get("prompt_hint", "")
-            prefix = f"INSTRUCCIONES ESPECIALES: {hint}\n\n" if hint else ""
-            audit_query = f"{prefix}Auditoria de {category} — busca problemas, ausencias o patrones relacionados con: {query}"
-            context, in_tok, out_tok, cost = deepseek_client.compress_context(audit_query, chunks)
+            instructions = f"Categoría '{category}'. Busca problemas, ausencias o patrones relacionados con: {query}."
+            if hint:
+                instructions += f"\nGuía específica: {hint}"
+            context, in_tok, out_tok, cost = deepseek_client.audit_context(instructions, chunks)
 
             files = list(dict.fromkeys(c["file_path"] for c in chunks))
             report[category] = {
@@ -237,10 +355,23 @@ async def handle(args: dict, session_id: int | None) -> dict:
             logger.error("Fallo en categoria %s: %s", category, exc, exc_info=True)
             report[category] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": []}
 
+    # Auditoría de contrato cross-repo (solo si se pasó paired_with)
+    if paired_project is not None:
+        try:
+            contract = await _contract_audit(project, paired_project, session_id)
+            total_input += contract.pop("_in", 0)
+            total_output += contract.pop("_out", 0)
+            total_cost += contract.pop("_cost", 0.0)
+            report["contracts"] = contract
+        except Exception as exc:
+            logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
+            report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
+
     return {
         "project": project_name,
         "project_type": project_type,
-        "categories_checked": len(queries_to_run),
+        "paired_with": paired_name or None,
+        "categories_checked": len(queries_to_run) + (1 if paired_project is not None else 0),
         "total_tokens": total_input + total_output,
         "total_cost_usd": round(total_cost, 6),
         "audit": report,

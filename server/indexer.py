@@ -89,6 +89,57 @@ def _chunk_css(lines: list[str]) -> list[list[str]] | None:
     return segments if len(segments) >= 2 else None
 
 
+def _chunk_python(content: str, lines: list[str]) -> list[list[str]] | None:
+    """Divide Python en segmentos por def/class top-level, manteniendo cada función
+    o clase completa en un chunk (con sus decoradores). Mejora el retrieval: una
+    función con un bug queda en una unidad coherente en vez de diluida en 150 líneas.
+
+    Devuelve None si no se puede parsear o si hay <2 definiciones top-level
+    (entonces se usa el fallback por líneas)."""
+    try:
+        tree = ast.parse(content)
+    except SyntaxError:
+        return None
+
+    boundaries: list[int] = []
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            start = node.lineno
+            if node.decorator_list:
+                # incluir los decoradores (ej. @router.put(...)) en el mismo chunk
+                start = min(start, min(d.lineno for d in node.decorator_list))
+            boundaries.append(start - 1)  # ast es 1-based; lines es 0-based
+
+    boundaries = sorted(set(boundaries))
+    if len(boundaries) < 2:
+        return None
+
+    segments: list[list[str]] = []
+    if boundaries[0] > 0:
+        # preludio del módulo: imports y constantes antes de la primera definición
+        segments.append(lines[:boundaries[0]])
+    for i, start in enumerate(boundaries):
+        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
+        segments.append(lines[start:end])
+    return segments
+
+
+def _pack_segments(segments: list[list[str]], header: str) -> list[str]:
+    """Convierte segmentos estructurales en chunks, subdividiendo por líneas los
+    que exceden CHUNK_SIZE."""
+    result: list[str] = []
+    for seg in segments:
+        if len(seg) <= CHUNK_SIZE:
+            result.append(header + "".join(seg))
+        else:
+            start = 0
+            while start < len(seg):
+                end = min(start + CHUNK_SIZE, len(seg))
+                result.append(header + "".join(seg[start:end]))
+                start += CHUNK_SIZE - CHUNK_OVERLAP
+    return result
+
+
 def _chunk_content(content: str, rel_path: str = "") -> list[str]:
     header = f"// {rel_path}\n" if rel_path else ""
     lines = content.splitlines(keepends=True)
@@ -97,32 +148,17 @@ def _chunk_content(content: str, rel_path: str = "") -> list[str]:
     if ext in {".tsx", ".jsx"}:
         segments = _chunk_tsx(lines)
         if segments:
-            result = []
-            for seg in segments:
-                if len(seg) <= CHUNK_SIZE:
-                    result.append(header + "".join(seg))
-                else:
-                    start = 0
-                    while start < len(seg):
-                        end = min(start + CHUNK_SIZE, len(seg))
-                        result.append(header + "".join(seg[start:end]))
-                        start += CHUNK_SIZE - CHUNK_OVERLAP
-            return result
+            return _pack_segments(segments, header)
 
     if ext in {".css", ".scss", ".sass"}:
         segments = _chunk_css(lines)
         if segments:
-            result = []
-            for seg in segments:
-                if len(seg) <= CHUNK_SIZE:
-                    result.append(header + "".join(seg))
-                else:
-                    start = 0
-                    while start < len(seg):
-                        end = min(start + CHUNK_SIZE, len(seg))
-                        result.append(header + "".join(seg[start:end]))
-                        start += CHUNK_SIZE - CHUNK_OVERLAP
-            return result
+            return _pack_segments(segments, header)
+
+    if ext == ".py":
+        segments = _chunk_python(content, lines)
+        if segments:
+            return _pack_segments(segments, header)
 
     chunks = []
     start = 0

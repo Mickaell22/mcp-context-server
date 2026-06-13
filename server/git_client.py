@@ -27,6 +27,59 @@ def extract_repo_name(repo_url: str) -> str:
     return name
 
 
+def check_remote_status(repo_path: str) -> dict:
+    """Compara el working tree local con su remoto (hace fetch, no pull).
+
+    Sirve para detectar el caso 'el local quedó desactualizado respecto a GitHub':
+    si se indexa así, el índice refleja una versión vieja del código.
+
+    Retorna un dict con: is_git, has_remote, behind (commits detrás del remoto),
+    ahead, dirty (cambios sin commitear), branch, y opcionalmente fetch_error/error.
+    No lanza: ante cualquier fallo devuelve la info parcial que pudo obtener.
+    """
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        return {"is_git": False}
+    try:
+        repo = git.Repo(repo_path)
+        dirty = repo.is_dirty(untracked_files=False)
+
+        if not repo.remotes:
+            return {"is_git": True, "has_remote": False, "dirty": dirty}
+
+        origin = repo.remotes.origin
+        # inyectar token para poder hacer fetch de repos privados
+        try:
+            origin.set_url(_inject_token(origin.url))
+        except Exception:
+            pass
+        try:
+            origin.fetch()
+        except Exception as e:
+            return {"is_git": True, "has_remote": True, "dirty": dirty, "fetch_error": str(e)}
+
+        try:
+            branch = repo.active_branch
+        except TypeError:  # HEAD detached
+            return {"is_git": True, "has_remote": True, "dirty": dirty, "detached": True}
+
+        tracking = branch.tracking_branch()
+        if tracking is None:
+            return {"is_git": True, "has_remote": True, "dirty": dirty, "branch": branch.name, "tracking": False}
+
+        behind = sum(1 for _ in repo.iter_commits(f"{branch.name}..{tracking.name}"))
+        ahead = sum(1 for _ in repo.iter_commits(f"{tracking.name}..{branch.name}"))
+        return {
+            "is_git": True,
+            "has_remote": True,
+            "dirty": dirty,
+            "branch": branch.name,
+            "behind": behind,
+            "ahead": ahead,
+        }
+    except Exception as e:
+        return {"is_git": True, "error": str(e)}
+
+
 def clone_repo(repo_url: str) -> tuple[str, str]:
     """
     Clona el repo en PROJECTS_BASE_PATH/<nombre>.

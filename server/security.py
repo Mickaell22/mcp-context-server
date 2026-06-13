@@ -10,7 +10,14 @@ BLOCKED_FILENAMES = {
     ".env", ".env.local", ".env.production", ".env.development",
     "secrets.json", "credentials.json", "serviceAccount.json",
     "CLAUDE.md",
+    # Lockfiles: enormes, autogenerados y sin valor semántico. Inflan el índice
+    # y el costo del audit (aparecían en findings de bundle_size/deprecated).
+    "package-lock.json", "yarn.lock", "pnpm-lock.yaml", "npm-shrinkwrap.json",
+    "poetry.lock", "Pipfile.lock", "composer.lock", "Gemfile.lock", "Cargo.lock",
 }
+
+# Sufijos de archivos generados/minificados que no aportan al análisis.
+BLOCKED_NAME_SUFFIXES = (".min.js", ".min.css", ".bundle.js", ".map")
 
 BLOCKED_DIRS = {
     ".git", "node_modules", "__pycache__", ".venv", "venv",
@@ -54,6 +61,9 @@ def is_file_allowed(path: str) -> tuple[bool, str]:
 
     if p.name in BLOCKED_FILENAMES:
         return False, f"archivo bloqueado: {p.name}"
+
+    if any(p.name.lower().endswith(suf) for suf in BLOCKED_NAME_SUFFIXES):
+        return False, f"archivo generado/minificado: {p.name}"
 
     if p.suffix.lower() in BLOCKED_EXTENSIONS:
         return False, f"extension bloqueada: {p.suffix}"

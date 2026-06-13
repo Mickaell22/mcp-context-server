@@ -59,12 +59,13 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="index_project",
-            description="Re-indexa un proyecto existente en disco. incremental=true solo procesa archivos cambiados.",
+            description="Re-indexa un proyecto existente en disco. incremental=true solo procesa archivos cambiados. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear) y, si lo detecta, devuelve needs_confirmation en vez de indexar: hay que reintentar con acknowledge_drift=true para indexar el estado local de todos modos.",
             inputSchema={
                 "type": "object",
                 "properties": {
                     "project": {"type": "string", "description": "Nombre del proyecto a indexar"},
                     "incremental": {"type": "boolean", "description": "Si es true, solo re-indexa archivos modificados desde el ultimo index"},
+                    "acknowledge_drift": {"type": "boolean", "description": "Si es true, indexa aunque el local este detras del remoto o tenga cambios sin commitear (segunda confirmacion tras un needs_confirmation)"},
                 },
                 "required": ["project"],
             },
@@ -111,7 +112,7 @@ async def list_tools() -> list[types.Tool]:
         ),
         types.Tool(
             name="audit_project",
-            description="Corre una bateria de queries de auditoria predefinidas sobre un proyecto y genera un reporte consolidado. Categorias: security, multitenancy, rate_limiting, input_validation, error_handling, deprecated, tests, api_contracts.",
+            description="Corre una bateria de queries de auditoria predefinidas sobre un proyecto y genera un reporte consolidado con hallazgos estructurados (severidad/archivo/linea/fix). Detecta automaticamente si es backend o frontend y corre las categorias correspondientes (incluye 'correctness' para cazar bugs de logica). Con paired_with audita ademas el CONTRATO API entre dos repos hermanos (front+back).",
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -119,8 +120,9 @@ async def list_tools() -> list[types.Tool]:
                     "categories": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "Categorias a auditar. Si se omite, corre todas las 8 categorias.",
+                        "description": "Categorias a auditar. Si se omite, corre todas las del tipo detectado (backend o frontend).",
                     },
+                    "paired_with": {"type": "string", "description": "Nombre del proyecto hermano (ej. el frontend si auditas el backend) para auditar el contrato API entre ambos: campos, nullability, tipos y endpoints que no calzan."},
                 },
                 "required": ["project"],
             },

@@ -38,7 +38,12 @@ CHROMA_PERSIST_PATH = _require("CHROMA_PERSIST_PATH")
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
 
 # Embeddings
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+# Por defecto all-MiniLM-L6-v2 (rápido, general). Para mejor recall sobre código
+# considerar un modelo code-aware: "jinaai/jina-embeddings-v2-base-code" o
+# "nomic-ai/nomic-embed-text-v1.5". OJO: cambiar el modelo cambia la dimensión de
+# los vectores e invalida el índice Chroma existente — exige reindex FULL de todos
+# los proyectos (index_project sin incremental).
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "all-MiniLM-L6-v2")
 CHROMA_COLLECTION = "code_chunks"
 
 # Chunking
@@ -46,5 +51,7 @@ CHUNK_SIZE = 150   # lineas por chunk
 CHUNK_OVERLAP = 20
 
 # Retrieval
-TOP_K_RESULTS = 8   # fragmentos a recuperar por query
+TOP_K_RESULTS = 8   # fragmentos a recuperar por query (query_context normal)
+# Las auditorías priorizan recall sobre costo: barren más chunks por categoría.
+AUDIT_TOP_K = int(os.getenv("AUDIT_TOP_K", "18"))
 MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "1.2"))  # cosine distance máximo (0=idéntico, 2=opuesto). MiniLM NL->código suele dar 0.6-1.1

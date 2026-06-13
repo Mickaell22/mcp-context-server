@@ -47,12 +47,12 @@ DeepSeek Flash API  ────────────────────
 | Tool | Parametros | Descripcion |
 |---|---|---|
 | `query_context` | `query`, `project` (str o list), `code_only` (bool), `top_k` (int, opcional) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. `top_k` por defecto 8; subelo en proyectos grandes. |
-| `index_project` | `project` | Re-indexa un proyecto existente por nombre. Modo incremental por defecto. |
+| `index_project` | `project`, `incremental` (bool), `acknowledge_drift` (bool) | Re-indexa un proyecto existente por nombre. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear); si lo detecta devuelve `needs_confirmation` y no indexa hasta reintentar con `acknowledge_drift=true`. |
 | `list_projects` | — | Lista todos los proyectos registrados en la BD. |
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
 | `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
-| `audit_project` | `project`, `categories` (opcional) | Auditoria automatica de codigo. Autodetecta frontend vs backend. Categorias backend: security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests. Frontend: accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming. Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
+| `audit_project` | `project`, `categories` (opcional), `paired_with` (opcional) | Auditoria automatica de codigo con hallazgos estructurados (severidad/archivo:linea/fix). Autodetecta frontend vs backend. Categorias backend: **correctness**, security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests. Frontend: **correctness**, accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming. Con `paired_with=<repo hermano>` añade una auditoria de **contrato API** cross-repo (campos, nullability, tipos y endpoints que no calzan entre front y back). Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
 | `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
 
 ---
@@ -176,6 +176,8 @@ sudo systemctl start mcp-context
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
 | `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `1.2`). Con `all-MiniLM-L6-v2`, queries en lenguaje natural contra codigo suelen dar distancias de 0.6–1.1; valores menores a 1.0 filtran demasiado y devuelven contexto vacio. |
 | `DEEPSEEK_TIMEOUT` | Timeout en segundos para llamadas a DeepSeek (default: `60.0`). El SDK Anthropic usa 10 min por defecto, demasiado para una tool MCP — bajarlo evita que `query_context`/`audit_project` se cuelguen. |
+| `EMBEDDING_MODEL` | Modelo SentenceTransformers para embeddings (default: `all-MiniLM-L6-v2`). Para mejor recall sobre codigo: `jinaai/jina-embeddings-v2-base-code` o `nomic-ai/nomic-embed-text-v1.5`. Cambiarlo invalida el indice Chroma (cambia la dimension del vector) y exige reindex **full** de todos los proyectos. |
+| `AUDIT_TOP_K` | Nº de chunks que recupera cada categoria del audit (default: `18`). El audit prioriza recall sobre costo; `query_context` sigue usando `TOP_K_RESULTS=8`. |
 
 Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
 
