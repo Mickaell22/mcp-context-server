@@ -8,6 +8,8 @@
 .env.production
 .env.development
 .env.*
+# .env.example es un template SIN secretos: debe versionarse (la regla .env.* lo atrapaba)
+!.env.example
 
 # Python
 .venv/

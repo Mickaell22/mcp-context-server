@@ -123,6 +123,7 @@ async def list_tools() -> list[types.Tool]:
                         "description": "Categorias a auditar. Si se omite, corre todas las del tipo detectado (backend o frontend).",
                     },
                     "paired_with": {"type": "string", "description": "Nombre del proyecto hermano (ej. el frontend si auditas el backend) para auditar el contrato API entre ambos: campos, nullability, tipos y endpoints que no calzan."},
+                    "raw": {"type": "boolean", "description": "Si es true, devuelve los chunks crudos numerados (archivo:linea) sin compresion DeepSeek — alta fidelidad para razonar bugs directamente, coste 0 de LLM."},
                 },
                 "required": ["project"],
             },

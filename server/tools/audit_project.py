@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import db
 import security
 import retriever
@@ -8,6 +9,40 @@ import deepseek_client
 from config import AUDIT_TOP_K
 
 logger = logging.getLogger(__name__)
+
+# Parseo de hallazgos estructurados para la pasada de consolidación.
+_SEV_RE = re.compile(r"\*\*\[(CR[IÍ]TICO|ALTO|MEDIO|BAJO)\]\*\*\s*(.+)")
+_SEV_NORM = {"CRITICO": "CRÍTICO", "CRÍTICO": "CRÍTICO", "ALTO": "ALTO", "MEDIO": "MEDIO", "BAJO": "BAJO"}
+_SEV_ORDER = {"CRÍTICO": 0, "ALTO": 1, "MEDIO": 2, "BAJO": 3}
+
+
+def _consolidate(report: dict) -> dict:
+    """Recolecta los hallazgos con severidad de todas las categorías, dedupe y
+    los ordena de mayor a menor severidad. Determinista, sin coste de LLM extra:
+    evita que los hallazgos críticos queden sepultados bajo ruido de estilo."""
+    found: list[dict] = []
+    for category, data in report.items():
+        text = (data or {}).get("findings", "") or ""
+        for line in text.splitlines():
+            m = _SEV_RE.search(line)
+            if not m:
+                continue
+            sev = _SEV_NORM.get(m.group(1).upper(), m.group(1).upper())
+            found.append({"severity": sev, "category": category, "detail": m.group(2).strip()})
+
+    seen: set[str] = set()
+    uniq: list[dict] = []
+    for f in found:
+        key = f["detail"][:80].lower()
+        if key not in seen:
+            seen.add(key)
+            uniq.append(f)
+    uniq.sort(key=lambda f: _SEV_ORDER.get(f["severity"], 9))
+
+    counts: dict[str, int] = {}
+    for f in uniq:
+        counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+    return {"total": len(uniq), "by_severity": counts, "top": uniq[:25]}
 
 # Pista compartida back/front: la búsqueda semántica engancha mal los bugs de
 # lógica (matchea comentarios antes que un `if x is not None`), así que la guía
@@ -157,6 +192,8 @@ def _structural_chunks(project_id: int, patterns: list[str], first_chunk_only: b
                 "file_path": fp,
                 "project_id": project_id,
                 "chunk_index": chunk["chunk_index"],
+                "start_line": chunk.get("start_line"),
+                "symbols": chunk.get("symbols", ""),
                 "content": chunk["content"],
                 "distance": 0.0,
             })
@@ -210,7 +247,7 @@ def _gather_contract_chunks(project: dict, patterns: list[str], query: str, role
     return combined
 
 
-async def _contract_audit(project_a: dict, project_b: dict, session_id: int | None) -> dict:
+async def _contract_audit(project_a: dict, project_b: dict, session_id: int | None, raw: bool = False) -> dict:
     """Audita el contrato API entre dos proyectos pareados (frontend + backend)."""
     type_a = _detect_project_type(project_a["id"])
     type_b = _detect_project_type(project_b["id"])
@@ -228,8 +265,11 @@ async def _contract_audit(project_a: dict, project_b: dict, session_id: int | No
     if not chunks:
         return {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
 
-    context, in_tok, out_tok, cost = deepseek_client.audit_context(_CONTRACT_INSTRUCTIONS, chunks)
     files = list(dict.fromkeys(c["file_path"] for c in chunks))
+    if raw:
+        return {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+
+    context, in_tok, out_tok, cost = deepseek_client.audit_context(_CONTRACT_INSTRUCTIONS, chunks)
 
     if session_id is not None:
         db.log_query(
@@ -264,6 +304,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
 
     if not security.is_path_allowed(project["path"]):
         return {"error": f"Proyecto '{project_name}' no esta en la whitelist"}
+
+    # raw: devuelve los chunks crudos numerados sin compresión DeepSeek (alta fidelidad
+    # para que el modelo que llama razone directamente sobre el código; coste 0 de LLM).
+    raw = bool(args.get("raw", False))
 
     # paired_with: proyecto hermano (front/back) para auditar el contrato API entre ambos
     paired_name = (args.get("paired_with") or "").strip()
@@ -314,9 +358,12 @@ async def handle(args: dict, session_id: int | None) -> dict:
                 all_chunks = retriever.retrieve("codigo, funciones, clases, estructura general del proyecto", project["id"])
                 if all_chunks:
                     chunks = all_chunks[:5]  # Use top 5 most relevant
+                    files = list(dict.fromkeys(c["file_path"] for c in chunks))
+                    if raw:
+                        report[category] = {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+                        continue
                     fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
                     context, in_tok, out_tok, cost = deepseek_client.audit_context(fallback_instr, chunks)
-                    files = list(dict.fromkeys(c["file_path"] for c in chunks))
                     report[category] = {"findings": context, "files_referenced": files, "tokens": in_tok + out_tok}
                     total_input += in_tok
                     total_output += out_tok
@@ -325,13 +372,18 @@ async def handle(args: dict, session_id: int | None) -> dict:
                 report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
                 continue
 
+            files = list(dict.fromkeys(c["file_path"] for c in chunks))
+
+            if raw:
+                report[category] = {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+                continue
+
             hint = strategy.get("prompt_hint", "")
             instructions = f"Categoría '{category}'. Busca problemas, ausencias o patrones relacionados con: {query}."
             if hint:
                 instructions += f"\nGuía específica: {hint}"
             context, in_tok, out_tok, cost = deepseek_client.audit_context(instructions, chunks)
 
-            files = list(dict.fromkeys(c["file_path"] for c in chunks))
             report[category] = {
                 "findings": context,
                 "files_referenced": files,
@@ -358,7 +410,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
     # Auditoría de contrato cross-repo (solo si se pasó paired_with)
     if paired_project is not None:
         try:
-            contract = await _contract_audit(project, paired_project, session_id)
+            contract = await _contract_audit(project, paired_project, session_id, raw=raw)
             total_input += contract.pop("_in", 0)
             total_output += contract.pop("_out", 0)
             total_cost += contract.pop("_cost", 0.0)
@@ -367,12 +419,17 @@ async def handle(args: dict, session_id: int | None) -> dict:
             logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
             report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
 
-    return {
+    result = {
         "project": project_name,
         "project_type": project_type,
         "paired_with": paired_name or None,
+        "mode": "raw" if raw else "compressed",
         "categories_checked": len(queries_to_run) + (1 if paired_project is not None else 0),
         "total_tokens": total_input + total_output,
         "total_cost_usd": round(total_cost, 6),
         "audit": report,
     }
+    # Consolidación: ranking por severidad entre categorías (no aplica en modo raw)
+    if not raw:
+        result["summary"] = _consolidate(report)
+    return result

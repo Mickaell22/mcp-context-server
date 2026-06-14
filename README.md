@@ -52,7 +52,7 @@ DeepSeek Flash API  ────────────────────
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
 | `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
-| `audit_project` | `project`, `categories` (opcional), `paired_with` (opcional) | Auditoria automatica de codigo con hallazgos estructurados (severidad/archivo:linea/fix). Autodetecta frontend vs backend. Categorias backend: **correctness**, security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests. Frontend: **correctness**, accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming. Con `paired_with=<repo hermano>` añade una auditoria de **contrato API** cross-repo (campos, nullability, tipos y endpoints que no calzan entre front y back). Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
+| `audit_project` | `project`, `categories` (opcional), `paired_with` (opcional), `raw` (opcional) | Auditoria automatica de codigo con hallazgos estructurados (severidad/archivo:linea/fix) + un `summary` consolidado y rankeado por severidad. `raw=true` devuelve los chunks crudos numerados sin compresion DeepSeek (coste 0, alta fidelidad). Autodetecta frontend vs backend. Categorias backend: **correctness**, security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests. Frontend: **correctness**, accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming. Con `paired_with=<repo hermano>` añade una auditoria de **contrato API** cross-repo (campos, nullability, tipos y endpoints que no calzan entre front y back). Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
 | `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
 
 ---
@@ -178,6 +178,8 @@ sudo systemctl start mcp-context
 | `DEEPSEEK_TIMEOUT` | Timeout en segundos para llamadas a DeepSeek (default: `60.0`). El SDK Anthropic usa 10 min por defecto, demasiado para una tool MCP — bajarlo evita que `query_context`/`audit_project` se cuelguen. |
 | `EMBEDDING_MODEL` | Modelo SentenceTransformers para embeddings (default: `all-MiniLM-L6-v2`). Para mejor recall sobre codigo: `jinaai/jina-embeddings-v2-base-code` o `nomic-ai/nomic-embed-text-v1.5`. Cambiarlo invalida el indice Chroma (cambia la dimension del vector) y exige reindex **full** de todos los proyectos. |
 | `AUDIT_TOP_K` | Nº de chunks que recupera cada categoria del audit (default: `18`). El audit prioriza recall sobre costo; `query_context` sigue usando `TOP_K_RESULTS=8`. |
+| `RERANK_ENABLED` | Activa el reranking híbrido semántico+léxico post-retrieval (default: `true`). `false` lo desactiva. |
+| `RERANK_CANDIDATE_MULT` / `RERANK_W_SEM` / `RERANK_W_LEX` | Tamaño del pool de candidatos (`top_k × mult`, default 3) y pesos del score (default 0.7 semántico / 0.3 léxico). |
 
 Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
 
@@ -214,6 +216,26 @@ import security, indexer
 security.add_allowed_path("/ruta/al/proyecto")
 indexer.index_project(project_id, "/ruta/al/proyecto")
 ```
+
+---
+
+## Tests y evaluación
+
+Dos capas, separadas a propósito:
+
+**Capa 1 — recall de retrieval (determinista, gratis, CI-able).** `tests/test_retrieval_recall.py` indexa las fixtures con bugs sembrados (`tests/fixtures/fake_backend` + `fake_frontend`) en un ChromaDB efímero y verifica que el archivo de cada bug se recupere con la query de su categoría. No usa DeepSeek ni Postgres; mide chunking + embeddings + reranking. Se salta solo si no hay `sentence-transformers`.
+
+```bash
+cd server && ./.venv/bin/python -m pytest tests/ -q
+```
+
+**Capa 2 — recall end-to-end del audit (no-determinista, ~centavos).** `eval/run_eval.py` corre el audit completo (con `paired_with` para el contrato) contra las fixtures y mide cuántos bugs REPORTA de verdad, con un scorecard ✓/✗ por bug. Usa DeepSeek + Postgres; correr a mano al afinar prompts/modelo/`AUDIT_TOP_K`, **no en CI**.
+
+```bash
+cd server && ./.venv/bin/python eval/run_eval.py
+```
+
+El *golden set* vive en `tests/fixtures/expected.json` (archivo, categoría, keywords, severidad por bug). Para medir recall hay que tener ground truth, y la única forma confiable es sembrar los bugs uno mismo: por eso las fixtures son sintéticas, no un repo real.
 
 ---
 

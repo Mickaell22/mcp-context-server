@@ -1,0 +1,89 @@
+{
+  "_comment": "Golden set: bugs sembrados a proposito en fake_backend/ y fake_frontend/. El harness mide cuantos detecta el MCP. 'file' es relativo a la raiz del proyecto. 'keywords' se usan para el match difuso en run_eval.py (Capa 2). 'category' indica con que query de audit deberia recuperarse (Capa 1).",
+  "backend": [
+    {
+      "id": "be-notas-clear",
+      "file": "routers/pedidos.py",
+      "category": "correctness",
+      "severity": "ALTO",
+      "keywords": ["notas", "is not None", "limpiar", "null"],
+      "desc": "PUT ignora null: no se puede vaciar notas/numero"
+    },
+    {
+      "id": "be-jwt-hardcoded",
+      "file": "routers/auth.py",
+      "category": "security",
+      "severity": "CRÍTICO",
+      "keywords": ["JWT_SECRET", "changeme", "hardcodeado", "fallback"],
+      "desc": "JWT_SECRET con fallback hardcodeado"
+    },
+    {
+      "id": "be-jwt-in-url",
+      "file": "routers/auth.py",
+      "category": "security",
+      "severity": "MEDIO",
+      "keywords": ["token", "url", "query param", "RedirectResponse"],
+      "desc": "JWT viaja en la URL como query param"
+    },
+    {
+      "id": "be-httpx-no-timeout",
+      "file": "routers/auth.py",
+      "category": "io_operations",
+      "severity": "MEDIO",
+      "keywords": ["httpx", "timeout", "AsyncClient", "bloqueante"],
+      "desc": "httpx.AsyncClient sin timeout"
+    },
+    {
+      "id": "be-cors-wildcard",
+      "file": "main.py",
+      "category": "security",
+      "severity": "BAJO",
+      "keywords": ["CORS", "allow_origins", "wildcard", "*"],
+      "desc": "CORS con allow_origins wildcard"
+    }
+  ],
+  "frontend": [
+    {
+      "id": "fe-subtotal-conteo",
+      "file": "src/pages/FacturaPublica.jsx",
+      "category": "correctness",
+      "severity": "MEDIO",
+      "keywords": ["subtotal", "items.length", "llegados", "conteo"],
+      "desc": "Etiqueta subtotal usa items.length en vez de itemsLlegados"
+    },
+    {
+      "id": "fe-img-no-alt",
+      "file": "src/components/ImageUpload.jsx",
+      "category": "accessibility",
+      "severity": "BAJO",
+      "keywords": ["img", "alt", "imagen"],
+      "desc": "<img> sin atributo alt"
+    },
+    {
+      "id": "fe-btn-no-aria",
+      "file": "src/components/ImageUpload.jsx",
+      "category": "accessibility",
+      "severity": "BAJO",
+      "keywords": ["aria-label", "boton", "icono", "button"],
+      "desc": "boton de solo icono sin aria-label"
+    },
+    {
+      "id": "fe-div-onclick-no-role",
+      "file": "src/components/ImageUpload.jsx",
+      "category": "accessibility",
+      "severity": "BAJO",
+      "keywords": ["div", "onClick", "role", "tabIndex", "teclado"],
+      "desc": "div con onClick sin role/tabIndex"
+    }
+  ],
+  "contracts": [
+    {
+      "id": "contract-null-ignored",
+      "files": ["src/api.js", "routers/pedidos.py"],
+      "category": "contracts",
+      "severity": "ALTO",
+      "keywords": ["null", "notas", "is not None", "limpiar", "nullability"],
+      "desc": "front manda null para limpiar, back lo ignora"
+    }
+  ]
+}

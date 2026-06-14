@@ -55,3 +55,12 @@ TOP_K_RESULTS = 8   # fragmentos a recuperar por query (query_context normal)
 # Las auditorías priorizan recall sobre costo: barren más chunks por categoría.
 AUDIT_TOP_K = int(os.getenv("AUDIT_TOP_K", "18"))
 MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "1.2"))  # cosine distance máximo (0=idéntico, 2=opuesto). MiniLM NL->código suele dar 0.6-1.1
+
+# Reranking híbrido (semántico + léxico) post-retrieval. Recupera un pool más
+# grande de Chroma y lo reordena mezclando distancia vectorial con overlap de
+# tokens — barato, sin deps nuevas, y rescata matches exactos (nombres de símbolo,
+# flags) que el embedding NL->código suele perder.
+RERANK_ENABLED = os.getenv("RERANK_ENABLED", "true").lower() != "false"
+RERANK_CANDIDATE_MULT = int(os.getenv("RERANK_CANDIDATE_MULT", "3"))  # pool = top_k * mult
+RERANK_W_SEM = float(os.getenv("RERANK_W_SEM", "0.7"))  # peso del score semántico
+RERANK_W_LEX = float(os.getenv("RERANK_W_LEX", "0.3"))  # peso del score léxico

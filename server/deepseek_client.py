@@ -66,10 +66,33 @@ AUDIT_SYSTEM_INSTRUCTIONS = (
 
 
 def _build_fragments(chunks: list[dict]) -> str:
-    return "\n\n---\n\n".join(
-        f"# {c['file_path']} (chunk {c['chunk_index']})\n{c['content']}"
-        for c in chunks
-    )
+    """Construye el bloque de fragmentos para el prompt. Si el chunk trae start_line
+    (metadata del índice nuevo), numera cada línea con su número real en el archivo
+    para que el modelo cite archivo:línea con precisión. Si trae symbols, los anota."""
+    parts: list[str] = []
+    for c in chunks:
+        start = c.get("start_line")
+        symbols = c.get("symbols")
+        meta = f"# {c['file_path']}"
+        if start:
+            meta += f" (desde línea {start})"
+        elif "chunk_index" in c:
+            meta += f" (chunk {c['chunk_index']})"
+        if symbols:
+            meta += f" — define: {symbols}"
+
+        body_lines = c["content"].splitlines()
+        # el header inline "// ruta" es ruido para numerar; se omite si está
+        if body_lines and body_lines[0].startswith("// "):
+            body_lines = body_lines[1:]
+
+        if start:
+            body = "\n".join(f"{start + i}: {ln}" for i, ln in enumerate(body_lines))
+        else:
+            body = "\n".join(body_lines)
+
+        parts.append(f"{meta}\n{body}")
+    return "\n\n---\n\n".join(parts)
 
 
 def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:

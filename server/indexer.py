@@ -55,41 +55,50 @@ _COMPONENT_BOUNDARY = re.compile(
 )
 
 
-def _chunk_tsx(lines: list[str]) -> list[list[str]] | None:
+# Cada función de troceo devuelve segmentos como (offset_0based, lineas) para
+# poder reconstruir la línea original de cada chunk y citarla en los hallazgos.
+def _segments_from_boundaries(lines: list[str], boundaries: list[int]) -> list[tuple[int, list[str]]]:
+    segments: list[tuple[int, list[str]]] = []
+    if boundaries[0] > 0:
+        segments.append((0, lines[:boundaries[0]]))
+    for i, start in enumerate(boundaries):
+        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
+        segments.append((start, lines[start:end]))
+    return segments
+
+
+def _chunk_tsx(lines: list[str]) -> list[tuple[int, list[str]]] | None:
     """Divide TSX/JSX en segmentos en límites de componente/función top-level."""
     boundaries = [i for i, line in enumerate(lines) if _COMPONENT_BOUNDARY.match(line)]
     if len(boundaries) < 2:
         return None
-    segments: list[list[str]] = []
-    if boundaries[0] > 0:
-        segments.append(lines[:boundaries[0]])
-    for i, start in enumerate(boundaries):
-        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
-        segments.append(lines[start:end])
-    return segments
+    return _segments_from_boundaries(lines, boundaries)
 
 
-def _chunk_css(lines: list[str]) -> list[list[str]] | None:
+def _chunk_css(lines: list[str]) -> list[tuple[int, list[str]]] | None:
     """Divide CSS/SCSS en bloques de reglas top-level preservando :root y .dark completos."""
-    segments: list[list[str]] = []
+    segments: list[tuple[int, list[str]]] = []
     current: list[str] = []
+    start_idx = 0
     depth = 0
 
-    for line in lines:
+    for i, line in enumerate(lines):
+        if not current:
+            start_idx = i
         current.append(line)
         depth += line.count("{") - line.count("}")
         if depth <= 0 and any(ln.strip() for ln in current):
-            segments.append(current[:])
+            segments.append((start_idx, current[:]))
             current = []
             depth = 0
 
     if current and any(ln.strip() for ln in current):
-        segments.append(current)
+        segments.append((start_idx, current))
 
     return segments if len(segments) >= 2 else None
 
 
-def _chunk_python(content: str, lines: list[str]) -> list[list[str]] | None:
+def _chunk_python(content: str, lines: list[str]) -> list[tuple[int, list[str]]] | None:
     """Divide Python en segmentos por def/class top-level, manteniendo cada función
     o clase completa en un chunk (con sus decoradores). Mejora el retrieval: una
     función con un bug queda en una unidad coherente en vez de diluida en 150 líneas.
@@ -113,34 +122,27 @@ def _chunk_python(content: str, lines: list[str]) -> list[list[str]] | None:
     boundaries = sorted(set(boundaries))
     if len(boundaries) < 2:
         return None
-
-    segments: list[list[str]] = []
-    if boundaries[0] > 0:
-        # preludio del módulo: imports y constantes antes de la primera definición
-        segments.append(lines[:boundaries[0]])
-    for i, start in enumerate(boundaries):
-        end = boundaries[i + 1] if i + 1 < len(boundaries) else len(lines)
-        segments.append(lines[start:end])
-    return segments
+    return _segments_from_boundaries(lines, boundaries)
 
 
-def _pack_segments(segments: list[list[str]], header: str) -> list[str]:
-    """Convierte segmentos estructurales en chunks, subdividiendo por líneas los
-    que exceden CHUNK_SIZE."""
-    result: list[str] = []
-    for seg in segments:
+def _pack_segments(segments: list[tuple[int, list[str]]], header: str) -> list[tuple[str, int]]:
+    """Convierte segmentos (offset, lineas) en chunks (contenido, linea_inicial_1based),
+    subdividiendo por líneas los que exceden CHUNK_SIZE."""
+    result: list[tuple[str, int]] = []
+    for offset, seg in segments:
         if len(seg) <= CHUNK_SIZE:
-            result.append(header + "".join(seg))
+            result.append((header + "".join(seg), offset + 1))
         else:
             start = 0
             while start < len(seg):
                 end = min(start + CHUNK_SIZE, len(seg))
-                result.append(header + "".join(seg[start:end]))
+                result.append((header + "".join(seg[start:end]), offset + start + 1))
                 start += CHUNK_SIZE - CHUNK_OVERLAP
     return result
 
 
-def _chunk_content(content: str, rel_path: str = "") -> list[str]:
+def _chunk_content(content: str, rel_path: str = "") -> list[tuple[str, int]]:
+    """Devuelve lista de (contenido, linea_inicial_1based en el archivo original)."""
     header = f"// {rel_path}\n" if rel_path else ""
     lines = content.splitlines(keepends=True)
 
@@ -160,13 +162,41 @@ def _chunk_content(content: str, rel_path: str = "") -> list[str]:
         if segments:
             return _pack_segments(segments, header)
 
-    chunks = []
+    chunks: list[tuple[str, int]] = []
     start = 0
     while start < len(lines):
         end = min(start + CHUNK_SIZE, len(lines))
-        chunks.append(header + "".join(lines[start:end]))
+        chunks.append((header + "".join(lines[start:end]), start + 1))
         start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
+
+
+_PY_SYMBOL_RE = re.compile(r'^\s*(?:async\s+)?def\s+(\w+)|^\s*class\s+(\w+)', re.M)
+_JS_SYMBOL_RE = re.compile(
+    r'(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+(\w+)'
+    r'|class\s+(\w+)'
+    r'|(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s*)?[\(<]',
+    re.M,
+)
+
+
+def _extract_symbols(content: str, ext: str) -> str:
+    """Nombres de funciones/clases definidas en el chunk, separados por coma.
+    ChromaDB solo acepta escalares en metadata, por eso se guarda como string."""
+    if ext == ".py":
+        pat = _PY_SYMBOL_RE
+    elif ext in {".js", ".ts", ".jsx", ".tsx"}:
+        pat = _JS_SYMBOL_RE
+    else:
+        return ""
+    seen: set[str] = set()
+    out: list[str] = []
+    for m in pat.finditer(content):
+        for g in m.groups():
+            if g and g not in seen:
+                seen.add(g)
+                out.append(g)
+    return ",".join(out[:20])
 
 
 def _make_chunk_id(project_id: int, rel_path: str, chunk_index: int) -> str:
@@ -296,13 +326,16 @@ def index_project(
             changed_paths.append(rel_path)
             new_imports.extend(_extract_imports(full_path, content, rel_path))
 
-            for i, chunk in enumerate(chunks):
+            ext = Path(rel_path).suffix.lower()
+            for i, (chunk, start_line) in enumerate(chunks):
                 new_chunks.append(chunk)
                 new_ids.append(_make_chunk_id(project_id, rel_path, i))
                 new_metadatas.append({
                     "project_id": project_id,
                     "file_path": rel_path,
                     "chunk_index": i,
+                    "start_line": start_line,
+                    "symbols": _extract_symbols(chunk, ext),
                 })
 
     # archivos eliminados del disco en modo incremental
