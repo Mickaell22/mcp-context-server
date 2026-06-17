@@ -13,7 +13,9 @@ Qué hace:
 2. Corre audit_project(backend, paired_with=frontend) y audit_project(frontend).
 3. Para cada bug de expected.json marca HIT si su archivo + alguna keyword
    aparecen en los hallazgos. Imprime scorecard y recall por categoría.
-4. Borra los proyectos efímeros (DB + Chroma + whitelist).
+4. Verifica los `must_not_flag`: código que NO debe aparecer en los hallazgos
+   de su categoría (termómetro de falsos positivos; clave para over-engineering).
+5. Borra los proyectos efímeros (DB + Chroma + whitelist).
 """
 
 from __future__ import annotations
@@ -97,9 +99,26 @@ async def main() -> int:
     print(f"Costo DeepSeek aprox: ${cost:.4f}")
     print("=" * 72)
 
+    # Falsos positivos: código que NO debe aparecer en los hallazgos de su categoría.
+    # Para over-engineering importa tanto como el recall (no debe sugerir borrar
+    # locks ni validación de input externo).
+    audits = {"backend": be_audit, "frontend": fe_audit}
+    violations = 0
+    for item in expected.get("must_not_flag", []):
+        audit = audits.get(item.get("project", "backend"), be_audit)
+        cat_text = _collect_text(audit, only=item["category"]).lower()
+        hit_kw = next((k for k in item["keywords"] if k.lower() in cat_text), None)
+        bad = hit_kw is not None
+        violations += bad
+        mark = f"✗ MARCADO ({hit_kw})" if bad else "✓ respetado"
+        print(f"{'no-flag':<14}{'--':<9}{item['id']:<22}{mark}")
+    if expected.get("must_not_flag"):
+        print(f"FALSOS POSITIVOS: {violations}/{len(expected['must_not_flag'])}")
+        print("=" * 72)
+
     await _cleanup()
     print("Fixtures efímeras eliminadas.")
-    return 0 if hits == total else 1
+    return 0 if (hits == total and violations == 0) else 1
 
 
 if __name__ == "__main__":

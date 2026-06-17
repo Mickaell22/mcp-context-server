@@ -13,6 +13,7 @@ from config import (
     DEEPSEEK_MAX_RETRIES,
     DEEPSEEK_TIMEOUT,
     COMPRESS_FALLBACK_MAX_CHARS,
+    AUDIT_BATCH_MAX_CHARS,
 )
 
 logger = logging.getLogger(__name__)
@@ -129,17 +130,57 @@ def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:
     return _raw_fallback(chunks), 0, 0, 0.0
 
 
+def _batch_by_chars(chunks: list[dict], max_chars: int) -> list[list[dict]]:
+    """Parte los chunks en lotes cuyo contenido sumado no exceda max_chars.
+    deepseek-chat tiene ~64K tokens de ventana; sin esto una categoría estructural
+    (accessibility, theming) en un repo grande supera el límite y la llamada falla.
+    Un chunk individual que ya exceda el presupuesto va solo en su lote (no se parte:
+    un chunk son <=CHUNK_SIZE líneas, siempre cabe)."""
+    batches: list[list[dict]] = []
+    current: list[dict] = []
+    size = 0
+    for c in chunks:
+        clen = len(c.get("content", ""))
+        if current and size + clen > max_chars:
+            batches.append(current)
+            current, size = [], 0
+        current.append(c)
+        size += clen
+    if current:
+        batches.append(current)
+    return batches
+
+
 def audit_context(instructions: str, chunks: list[dict]) -> tuple[str, int, int, float]:
     """Variante de compress_context para auditorías: pide hallazgos estructurados
-    con severidad, archivo:línea y fix. Retorna (findings, in_tok, out_tok, costo)."""
+    con severidad, archivo:línea y fix. Retorna (findings, in_tok, out_tok, costo).
+
+    Parte los chunks en lotes que quepan en la ventana del modelo (ver _batch_by_chars)
+    y concatena los hallazgos. Una categoría con muchos archivos se audita en varias
+    pasadas en vez de fallar con error 400."""
     if not chunks:
         return "Sin hallazgos.", 0, 0, 0.0
-    prompt = (
-        f"{AUDIT_SYSTEM_INSTRUCTIONS}\n\n"
-        f"TAREA DE AUDITORÍA: {instructions}\n\n"
-        f"Fragmentos de código a auditar:\n\n{_build_fragments(chunks)}"
-    )
-    return _call(prompt, chunks)
+
+    batches = _batch_by_chars(chunks, AUDIT_BATCH_MAX_CHARS)
+    findings: list[str] = []
+    total_in = total_out = 0
+    total_cost = 0.0
+    for batch in batches:
+        prompt = (
+            f"{AUDIT_SYSTEM_INSTRUCTIONS}\n\n"
+            f"TAREA DE AUDITORÍA: {instructions}\n\n"
+            f"Fragmentos de código a auditar:\n\n{_build_fragments(batch)}"
+        )
+        text, in_tok, out_tok, cost = _call(prompt, batch)
+        if text and text.strip() and text.strip() != "Sin hallazgos.":
+            findings.append(text.strip())
+        total_in += in_tok
+        total_out += out_tok
+        total_cost += cost
+
+    if not findings:
+        return "Sin hallazgos.", total_in, total_out, total_cost
+    return "\n".join(findings), total_in, total_out, total_cost
 
 
 def compress_context(query: str, chunks: list[dict]) -> tuple[str, int, int, float]:

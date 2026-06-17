@@ -54,6 +54,17 @@ CHUNK_OVERLAP = 20
 TOP_K_RESULTS = 8   # fragmentos a recuperar por query (query_context normal)
 # Las auditorías priorizan recall sobre costo: barren más chunks por categoría.
 AUDIT_TOP_K = int(os.getenv("AUDIT_TOP_K", "18"))
+
+# Batching del audit: deepseek-chat tiene ~64K tokens de ventana. Las categorías
+# estructurales (accessibility, theming) cargan TODOS los chunks de components/app,
+# que en un repo grande superan la ventana → error 400. audit_context parte los
+# chunks en lotes que no excedan este presupuesto de caracteres (~4 chars/token,
+# 120K chars ≈ 30K tokens, deja margen para system + output). Una categoría con más
+# chunks se audita en varias pasadas y se concatenan los hallazgos.
+AUDIT_BATCH_MAX_CHARS = int(os.getenv("AUDIT_BATCH_MAX_CHARS", "120000"))
+# Tope total de chunks por categoría (0 = sin tope, audita todo en lotes). Subilo
+# o capalo para controlar el costo en repos grandes; con 0 prioriza recall.
+AUDIT_MAX_CHUNKS = int(os.getenv("AUDIT_MAX_CHUNKS", "0"))
 MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "1.2"))  # cosine distance máximo (0=idéntico, 2=opuesto). MiniLM NL->código suele dar 0.6-1.1
 
 # Reranking híbrido (semántico + léxico) post-retrieval. Recupera un pool más

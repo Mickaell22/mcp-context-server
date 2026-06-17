@@ -6,7 +6,7 @@ import db
 import security
 import retriever
 import deepseek_client
-from config import AUDIT_TOP_K
+from config import AUDIT_TOP_K, AUDIT_MAX_CHUNKS
 
 logger = logging.getLogger(__name__)
 
@@ -61,6 +61,41 @@ _CORRECTNESS_HINT = (
     "Indica archivo, función y el snippet exacto."
 )
 
+# Pista de la categoría `over-engineering`: complejidad innecesaria, no bugs.
+# La búsqueda semántica engancha mejor las abstracciones (tienen nombres:
+# interfaz, factory, wrapper) que los bugs de lógica, pero igual necesita una
+# guía explícita de qué reportar y, sobre todo, qué NO tocar (guardarrail).
+_OVER_ENGINEERING_HINT = (
+    "Detecta COMPLEJIDAD INNECESARIA (no bugs): código que funciona pero bajó más "
+    "peldaños de los necesarios en la escalera (1.YAGNI 2.stdlib 3.feature nativa "
+    "4.dependencia ya instalada 5.una línea). Reporta: "
+    "1) [MEDIO] Abstracción prematura: interfaces, clases abstractas, factories o "
+    "wrappers con UNA sola implementación o UN solo uso; indirección que solo delega. "
+    "2) [ALTO] Dependencia evitable: librería externa para algo que la stdlib o una "
+    "feature nativa ya hace (left-pad, cliente HTTP entero para un GET, moment para "
+    "formatear una fecha, lodash para map/filter). Nombra la alternativa nativa exacta. "
+    "3) [MEDIO] Reinvención de la rueda: parser CSV/JSON a mano, pool de threads casero, "
+    "cache LRU manual cuando el runtime ya lo da battle-tested. Indica el reemplazo. "
+    "4) [BAJO] Boilerplate: getters/setters triviales, DTOs espejo, mappers 1:1. "
+    "En el Fix prioriza BORRAR sobre reescribir e indica el peldaño (1-6) que aplica. "
+    "GUARDARRAIL (crítico, ante la duda NO reportes): NUNCA marques como sobre-ingeniería "
+    "la validación de input en límites de confianza (red, archivos, API pública, "
+    "formularios), el manejo de errores que evita pérdida de datos, la seguridad (authz, "
+    "sanitización, hashing, secretos), la accesibilidad, la concurrencia necesaria (locks, "
+    "transacciones, idempotencia), los reintentos por red/hardware ni los tests legítimos. "
+    "Si es un BUG (comportamiento incorrecto) va en `correctness`, no aquí: aquí solo lo "
+    "que FUNCIONA pero se puede borrar sin perder correctness, seguridad ni robustez."
+)
+
+# Query semántica común a backend y frontend (misma cadena en ambos maps para que
+# {**_BACKEND_MAP, **_FRONTEND_MAP} no genere una key con dos valores distintos).
+_OVER_ENGINEERING_QUERY = (
+    "interfaz o clase abstracta con una sola implementacion, factory o wrapper que solo delega, "
+    "dependencia externa para una tarea trivial que ya hace la stdlib, codigo que reimplementa a mano "
+    "un parser cache o pool, parametro o flag sin ningun caller, getter setter trivial o DTO espejo, "
+    "indireccion excesiva, clase con estado donde bastaba una funcion pura"
+)
+
 BACKEND_QUERIES: list[tuple[str, str]] = [
     ("correctness",     "bug de logica, actualizacion parcial que ignora null, condicion invertida, off-by-one, valor calculado que no coincide con su etiqueta, comparacion is/==, manejo de None vs vacio, return temprano que silencia datos"),
     ("security",        "autenticacion, autorizacion, permisos, roles, control de acceso, JWT, tokens, API keys, secrets hardcodeados, variables de entorno"),
@@ -71,6 +106,7 @@ BACKEND_QUERIES: list[tuple[str, str]] = [
     ("imports",         "imports no utilizados, dependencias circulares, imports relativos, organizacion de imports"),
     ("io_operations",   "archivos abiertos sin cerrar, timeouts de red, manejo de APIs externas, descargas, operaciones bloqueantes"),
     ("tests",           "tests unitarios, cobertura, fixtures, mocks, integracion, casos de prueba, assertions"),
+    ("over-engineering", _OVER_ENGINEERING_QUERY),
 ]
 
 FRONTEND_QUERIES: list[tuple[str, str]] = [
@@ -86,6 +122,7 @@ FRONTEND_QUERIES: list[tuple[str, str]] = [
     ("bundle_size",        "import pesado, lodash, moment, date-fns, bundle, tree shaking, side effects, package size, barrel exports, index re-export"),
     ("hydration",          "useEffect, useLayoutEffect, typeof window, isMounted, suppressHydrationWarning, SSR mismatch, client only, next/dynamic, ssr false, localStorage en render"),
     ("theming",            "variables CSS, :root, .dark, tokens de diseño, contraste, color, prose, tailwind bg text border, muted foreground background, hardcoded color, hex rgb hsl"),
+    ("over-engineering",   _OVER_ENGINEERING_QUERY),
 ]
 
 # Estrategia de recuperación por categoría.
@@ -94,6 +131,13 @@ FRONTEND_QUERIES: list[tuple[str, str]] = [
 # import_patterns: igual pero solo chunk 0 de cada archivo (donde viven los imports).
 # prompt_hint: texto prepuesto al prompt de auditoría para guiar al modelo.
 CATEGORY_STRATEGY: dict[str, dict] = {
+    "over-engineering": {
+        # La señal "dependencia evitable" (la de mayor severidad) es invisible para la
+        # búsqueda semántica de abstracciones: hay que mirar el manifiesto de deps.
+        # El resto de señales (abstracción, reinvención, boilerplate) las trae la semántica.
+        "structural_patterns": ["%requirements.txt", "%package.json"],
+        "prompt_hint": _OVER_ENGINEERING_HINT,
+    },
     "correctness": {
         # Semántica sola tiene recall bajo para bugs de lógica; sumamos barrido
         # estructural de las carpetas donde vive la lógica de negocio para que las
@@ -371,6 +415,12 @@ async def handle(args: dict, session_id: int | None) -> dict:
                     continue
                 report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
                 continue
+
+            # Tope opcional de chunks por categoría (AUDIT_MAX_CHUNKS=0 → sin tope).
+            # En producción acota costo; en pruebas se deja en 0 para recall máximo.
+            if AUDIT_MAX_CHUNKS and len(chunks) > AUDIT_MAX_CHUNKS:
+                logger.info("Categoria %s: %d chunks recortados a %d (AUDIT_MAX_CHUNKS)", category, len(chunks), AUDIT_MAX_CHUNKS)
+                chunks = chunks[:AUDIT_MAX_CHUNKS]
 
             files = list(dict.fromkeys(c["file_path"] for c in chunks))
 

@@ -1,5 +1,5 @@
 {
-  "_comment": "Golden set: bugs sembrados a proposito en fake_backend/ y fake_frontend/. El harness mide cuantos detecta el MCP. 'file' es relativo a la raiz del proyecto. 'keywords' se usan para el match difuso en run_eval.py (Capa 2). 'category' indica con que query de audit deberia recuperarse (Capa 1).",
+  "_comment": "Golden set: bugs sembrados a proposito en fake_backend/ y fake_frontend/. El harness mide cuantos detecta el MCP. 'file' es relativo a la raiz del proyecto. 'keywords' se usan para el match difuso en run_eval.py (Capa 2). 'category' indica con que query de audit deberia recuperarse (Capa 1). 'must_not_flag' son falsos positivos a vigilar: codigo que NO debe aparecer en los hallazgos de su categoria (termometro de precision, solo Capa 2).",
   "backend": [
     {
       "id": "be-notas-clear",
@@ -40,6 +40,14 @@
       "severity": "BAJO",
       "keywords": ["CORS", "allow_origins", "wildcard", "*"],
       "desc": "CORS con allow_origins wildcard"
+    },
+    {
+      "id": "be-over-factory",
+      "file": "notificaciones.py",
+      "category": "over-engineering",
+      "severity": "MEDIO",
+      "keywords": ["BaseNotifier", "EmailNotifier", "NotifierFactory", "factory", "interfaz", "implementacion", "abstracta", "getter", "setter"],
+      "desc": "BaseNotifier+EmailNotifier+NotifierFactory: abstraccion prematura con 1 sola impl; Message con getters/setters triviales"
     }
   ],
   "frontend": [
@@ -84,6 +92,22 @@
       "severity": "ALTO",
       "keywords": ["null", "notas", "is not None", "limpiar", "nullability"],
       "desc": "front manda null para limpiar, back lo ignora"
+    }
+  ],
+  "must_not_flag": [
+    {
+      "id": "noflag-lock",
+      "project": "backend",
+      "category": "over-engineering",
+      "keywords": ["registrar_envio", "_lock", "threading.Lock"],
+      "desc": "el lock protege un contador compartido: concurrencia necesaria, no over-engineering"
+    },
+    {
+      "id": "noflag-validacion-input",
+      "project": "backend",
+      "category": "over-engineering",
+      "keywords": ["validar_destinatario", "email invalido"],
+      "desc": "validacion de input externo (API publica): no es defensa redundante"
     }
   ]
 }
