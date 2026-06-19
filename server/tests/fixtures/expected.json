@@ -82,6 +82,22 @@
       "severity": "BAJO",
       "keywords": ["div", "onClick", "role", "tabIndex", "teclado"],
       "desc": "div con onClick sin role/tabIndex"
+    },
+    {
+      "id": "fe-fetch-waterfall",
+      "file": "src/pages/Reportes.jsx",
+      "category": "performance",
+      "severity": "ALTO",
+      "keywords": ["waterfall", "Promise.all", "getVentas", "getGastos", "serie", "secuencial", "paralelo"],
+      "desc": "dos requests independientes en serie en vez de Promise.all"
+    },
+    {
+      "id": "fe-inline-component",
+      "file": "src/pages/Reportes.jsx",
+      "category": "performance",
+      "severity": "ALTO",
+      "keywords": ["Fila", "componente", "dentro", "remonta", "render", "inline", "modulo"],
+      "desc": "componente Fila definido dentro de Reportes, se remonta en cada render"
     }
   ],
   "contracts": [
@@ -108,6 +124,13 @@
       "category": "over-engineering",
       "keywords": ["validar_destinatario", "email invalido"],
       "desc": "validacion de input externo (API publica): no es defensa redundante"
+    },
+    {
+      "id": "noflag-perf-inline-handler",
+      "project": "frontend",
+      "category": "performance",
+      "keywords": ["refrescar", "useCallback"],
+      "desc": "handler inline trivial (onClick refrescar): NO debe sugerirse useCallback, memoizar de mas es sobre-optimizar"
     }
   ]
 }

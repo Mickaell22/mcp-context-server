@@ -19,3 +19,7 @@ export const updatePedido = (id, { numero, fecha, notas }) =>
 export const deletePedido = (id) => api.delete(`/pedidos/${id}`)
 
 export const getClientes = () => api.get('/clientes')
+
+export const getVentas = () => api.get('/ventas')
+
+export const getGastos = () => api.get('/gastos')

@@ -58,6 +58,15 @@ _CORRECTNESS_HINT = (
     "5) early returns o except que silencian datos/errores. "
     "6) comparaciones de igualdad con float, o mezcla Decimal/float. "
     "7) variables mutables compartidas / closures obsoletos. "
+    # ponytail: correctness es categoría compartida back/front y la estrategia es
+    # única (no se ramifica por project_type); el bloque React va condicionado en
+    # el propio texto, así el backend simplemente no lo matchea.
+    "Si el código es React/JSX, además: dependencias de useEffect faltantes o de más "
+    "(closure que lee estado viejo), índice del array como `key` en listas que se "
+    "reordenan o filtran, mutación directa de estado (push/splice/asignación a una "
+    "variable de useState) en vez de copia inmutable, setState tras un await en un "
+    "componente que pudo desmontarse, input que pasa de no-controlado a controlado "
+    "(value de undefined a un valor). "
     "Indica archivo, función y el snippet exacto."
 )
 
@@ -94,6 +103,64 @@ _OVER_ENGINEERING_QUERY = (
     "dependencia externa para una tarea trivial que ya hace la stdlib, codigo que reimplementa a mano "
     "un parser cache o pool, parametro o flag sin ningun caller, getter setter trivial o DTO espejo, "
     "indireccion excesiva, clase con estado donde bastaba una funcion pura"
+)
+
+# --- Pistas frontend destiladas de skills externas -------------------------
+# Conocimiento de Vercel React Best Practices (70 reglas de performance) y Web
+# Interface Guidelines (a11y/forms), horneado como señales en el prompt en vez de
+# fetchear reglas en runtime. Filosofía del usuario: Claude Code usa las skills
+# para CONSTRUIR; el MCP usa su conocimiento destilado para REVISAR lo ya
+# construido, gastando menos tokens con la misma calidad de revisión.
+# ponytail: conocimiento externo -> hint. Cero deps, cero tools, cero red.
+
+_PERFORMANCE_HINT = (
+    "Detecta problemas de performance React/Next CONCRETOS (no estilo). Reporta: "
+    "1) [ALTO] Waterfalls de datos: awaits secuenciales independientes que deberían ir en "
+    "Promise.all; fetch en cascada padre->hijo paralelizable; await de un flag remoto antes "
+    "de comprobar una condición sync barata. "
+    "2) [ALTO] Componente o función-componente definido DENTRO de otro componente: se recrea "
+    "en cada render y remonta su subárbol. Debe ir a nivel de módulo. "
+    "3) [MEDIO] Estado derivado calculado con useEffect+setState cuando se puede derivar "
+    "durante el render (provoca un render extra o un loop). "
+    "4) [MEDIO] Trabajo caro en cada render (filter/map/sort de listas grandes, new Date, regex, "
+    "new de objetos) sin useMemo; lista larga sin virtualización ni content-visibility. "
+    "5) [MEDIO] Dependencias de efecto no primitivas (objeto/array/función inline) que rompen la "
+    "memoización; handler pasado a un hijo ENVUELTO en React.memo sin useCallback (solo cuenta si "
+    "el hijo está realmente memoizado). "
+    "6) [BAJO] Componente pesado sin next/dynamic ni React.lazy; render condicional con `&&` sobre "
+    "un número (puede pintar 0/NaN — usa ternario). "
+    "GUARDARRAIL (estricto, decisivo): si un componente NO tiene hijos en React.memo, ni listas "
+    "grandes, ni cálculos costosos en render, entonces useMemo/useCallback/memo NO aportan nada y "
+    "NO debes mencionarlos. NUNCA sugieras envolver en useCallback un handler trivial (un setState "
+    "directo, un toggle): memoizar de más es sobre-optimización con coste propio. Ante la duda, no "
+    "lo reportes. Indica archivo, línea y patrón."
+)
+
+_STATE_MANAGEMENT_HINT = (
+    "Reporta problemas de gestión de estado React: "
+    "1) [MEDIO] estado que en realidad es DERIVADO de props u otro estado y se guarda con "
+    "useState+useEffect (debe calcularse durante el render, no sincronizarse con un efecto). "
+    "2) [MEDIO] prop drilling profundo (la misma prop cruzando 3+ niveles) que pide Context o "
+    "composición de componentes. "
+    "3) [MEDIO] setState basado en el valor previo sin forma funcional (setX(x+1) en vez de "
+    "setX(v => v+1)) dentro de callbacks o efectos. "
+    "4) [BAJO] estado global (Context/Redux/Zustand) para algo que solo usa un componente; "
+    "suscripción a estado que solo se lee dentro de un callback (renders de más). "
+    "NO marques estado local legítimo ni Context bien acotado. Indica archivo y línea."
+)
+
+# error_handling es categoría compartida back/front: el hint cubre ambos lados y
+# cada uno ignora el medio que no le aplica. Antes corría sin hint en ambos sets.
+_ERROR_HANDLING_HINT = (
+    "Reporta manejo de errores deficiente. "
+    "En frontend/React: componentes que hacen fetch y solo cubren el happy path (falta el trío "
+    "loading/empty/error); promesas sin .catch ni try/catch que dejan la UI colgada en 'Cargando'; "
+    "ausencia de Error Boundary alrededor de subárboles que pueden lanzar; acceso a `data` "
+    "potencialmente null/undefined sin guard tras el fetch. "
+    "En backend: except que traga la excepción (except: pass, except Exception sin re-raise ni log), "
+    "errores logueados pero no propagados, recursos sin cerrar cuando salta una excepción, "
+    "respuestas de error que filtran stacktrace o detalles internos al cliente. "
+    "Indica archivo y línea."
 )
 
 BACKEND_QUERIES: list[tuple[str, str]] = [
@@ -172,16 +239,27 @@ CATEGORY_STRATEGY: dict[str, dict] = {
         # Para detectar ausencias hay que leer el JSX completo de cada componente.
         "semantic_disabled": True,
         "structural_patterns": ["%/components/%", "%/app/%", "%/pages/%"],
+        # Señales de Web Interface Guidelines (Vercel) horneadas: la skill original
+        # fetchea las reglas por HTTP; aquí van fijas (son estables y DeepSeek no
+        # va a fetchear). La semántica no ve ausencias, por eso se lee el JSX entero.
         "prompt_hint": (
             "La búsqueda semántica no detecta ausencias. Analiza el JSX y reporta: "
-            "<img> sin atributo alt (o con alt vacío), "
+            "<img> sin atributo alt (o con alt vacío en imagen informativa), "
             "<button>/<a> sin texto visible ni aria-label, "
-            "<div>/<span> con onClick sin role='button' ni aria-*, "
-            "inputs sin <label> asociado ni aria-label, "
-            "jerarquía de headings rota (ej. h2 antes de h1, salto h1→h3). "
-            "Indica archivo y elemento problemático."
+            "<div>/<span> con onClick sin role='button', tabIndex ni manejo de teclado (Enter/Espacio), "
+            "input sin <label htmlFor> asociado ni aria-label, "
+            "campo de formulario sin type/autocomplete/inputmode adecuados (email, tel, numeric), "
+            "elemento interactivo que elimina el outline de foco sin alternativa :focus-visible, "
+            "jerarquía de headings rota (ej. h2 antes de h1, salto h1→h3), "
+            "color como ÚNICO indicador de estado (error solo en rojo, sin texto ni icono), "
+            "animación/transición que ignora prefers-reduced-motion, "
+            "página sin landmarks semánticos (<main>/<nav>/<header>, todo en <div>). "
+            "Indica archivo, línea y el elemento problemático."
         ),
     },
+    "performance": {"prompt_hint": _PERFORMANCE_HINT},
+    "state_management": {"prompt_hint": _STATE_MANAGEMENT_HINT},
+    "error_handling": {"prompt_hint": _ERROR_HANDLING_HINT},
     "theming": {
         # globals.css/tailwind.config completos para ver todos los tokens definidos.
         # import_patterns en %.css/%.scss trae chunk 0 de cada CSS (donde viven :root vars).
