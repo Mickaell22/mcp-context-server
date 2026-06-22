@@ -56,7 +56,7 @@ _COMPONENT_BOUNDARY = re.compile(
 
 
 # Cada función de troceo devuelve segmentos como (offset_0based, lineas) para
-# poder reconstruir la línea original de cada chunk y citarla en los hallazgos.
+# poder reconstruir el rango de líneas (inicio y fin) de cada chunk y citarlo.
 def _segments_from_boundaries(lines: list[str], boundaries: list[int]) -> list[tuple[int, list[str]]]:
     segments: list[tuple[int, list[str]]] = []
     if boundaries[0] > 0:
@@ -125,24 +125,24 @@ def _chunk_python(content: str, lines: list[str]) -> list[tuple[int, list[str]]]
     return _segments_from_boundaries(lines, boundaries)
 
 
-def _pack_segments(segments: list[tuple[int, list[str]]], header: str) -> list[tuple[str, int]]:
-    """Convierte segmentos (offset, lineas) en chunks (contenido, linea_inicial_1based),
-    subdividiendo por líneas los que exceden CHUNK_SIZE."""
-    result: list[tuple[str, int]] = []
+def _pack_segments(segments: list[tuple[int, list[str]]], header: str) -> list[tuple[str, int, int]]:
+    """Convierte segmentos (offset, lineas) en chunks (contenido, linea_inicial_1based,
+    linea_final_1based), subdividiendo por líneas los que exceden CHUNK_SIZE."""
+    result: list[tuple[str, int, int]] = []
     for offset, seg in segments:
         if len(seg) <= CHUNK_SIZE:
-            result.append((header + "".join(seg), offset + 1))
+            result.append((header + "".join(seg), offset + 1, offset + len(seg)))
         else:
             start = 0
             while start < len(seg):
                 end = min(start + CHUNK_SIZE, len(seg))
-                result.append((header + "".join(seg[start:end]), offset + start + 1))
+                result.append((header + "".join(seg[start:end]), offset + start + 1, offset + end))
                 start += CHUNK_SIZE - CHUNK_OVERLAP
     return result
 
 
-def _chunk_content(content: str, rel_path: str = "") -> list[tuple[str, int]]:
-    """Devuelve lista de (contenido, linea_inicial_1based en el archivo original)."""
+def _chunk_content(content: str, rel_path: str = "") -> list[tuple[str, int, int]]:
+    """Devuelve lista de (contenido, linea_inicial_1based, linea_final_1based) en el archivo original."""
     header = f"// {rel_path}\n" if rel_path else ""
     lines = content.splitlines(keepends=True)
 
@@ -162,11 +162,11 @@ def _chunk_content(content: str, rel_path: str = "") -> list[tuple[str, int]]:
         if segments:
             return _pack_segments(segments, header)
 
-    chunks: list[tuple[str, int]] = []
+    chunks: list[tuple[str, int, int]] = []
     start = 0
     while start < len(lines):
         end = min(start + CHUNK_SIZE, len(lines))
-        chunks.append((header + "".join(lines[start:end]), start + 1))
+        chunks.append((header + "".join(lines[start:end]), start + 1, end))
         start += CHUNK_SIZE - CHUNK_OVERLAP
     return chunks
 
@@ -327,7 +327,7 @@ def index_project(
             new_imports.extend(_extract_imports(full_path, content, rel_path))
 
             ext = Path(rel_path).suffix.lower()
-            for i, (chunk, start_line) in enumerate(chunks):
+            for i, (chunk, start_line, end_line) in enumerate(chunks):
                 new_chunks.append(chunk)
                 new_ids.append(_make_chunk_id(project_id, rel_path, i))
                 new_metadatas.append({
@@ -335,6 +335,7 @@ def index_project(
                     "file_path": rel_path,
                     "chunk_index": i,
                     "start_line": start_line,
+                    "end_line": end_line,
                     "symbols": _extract_symbols(chunk, ext),
                 })
 

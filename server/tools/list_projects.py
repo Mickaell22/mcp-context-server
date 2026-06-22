@@ -7,6 +7,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
         "projects": [
             {
                 "name": p["name"],
+                "path": p["path"],
                 "last_indexed": p["last_indexed_at"].isoformat() if p["last_indexed_at"] else None,
                 "repo_url": p["repo_url"],
             }

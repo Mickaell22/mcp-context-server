@@ -60,7 +60,7 @@ def retrieve(
     project_ids puede ser un int o lista de ints para queries cross-repo.
     code_only=True excluye archivos de documentacion (.md, .txt, etc).
     rerank=True recupera un pool mayor y lo reordena con score híbrido sem+léxico.
-    Cada item: {file_path, project_id, chunk_index, start_line, symbols, content, distance}
+    Cada item: {file_path, project_id, chunk_index, start_line, end_line, symbols, content, distance}
     """
     model = _get_model()
     collection = _get_collection()
@@ -101,6 +101,7 @@ def retrieve(
             "project_id": meta["project_id"],
             "chunk_index": meta["chunk_index"],
             "start_line": meta.get("start_line"),
+            "end_line": meta.get("end_line"),
             "symbols": meta.get("symbols", ""),
             "content": doc,
             "distance": dist,
@@ -133,6 +134,7 @@ def get_file_chunks(project_id: int, file_path: str) -> list[dict]:
             "content": doc,
             "chunk_index": meta["chunk_index"],
             "start_line": meta.get("start_line"),
+            "end_line": meta.get("end_line"),
             "symbols": meta.get("symbols", ""),
         }
         for doc, meta in chunks

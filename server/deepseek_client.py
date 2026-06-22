@@ -73,9 +73,12 @@ def _build_fragments(chunks: list[dict]) -> str:
     parts: list[str] = []
     for c in chunks:
         start = c.get("start_line")
+        end = c.get("end_line")
         symbols = c.get("symbols")
         meta = f"# {c['file_path']}"
-        if start:
+        if start and end:
+            meta += f" (líneas {start}-{end})"
+        elif start:
             meta += f" (desde línea {start})"
         elif "chunk_index" in c:
             meta += f" (chunk {c['chunk_index']})"

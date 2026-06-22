@@ -315,6 +315,7 @@ def _structural_chunks(project_id: int, patterns: list[str], first_chunk_only: b
                 "project_id": project_id,
                 "chunk_index": chunk["chunk_index"],
                 "start_line": chunk.get("start_line"),
+                "end_line": chunk.get("end_line"),
                 "symbols": chunk.get("symbols", ""),
                 "content": chunk["content"],
                 "distance": 0.0,

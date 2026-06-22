@@ -5,7 +5,8 @@ Solo se ejercitan funciones puras de troceo; no se cargan embeddings ni se toca
 ChromaDB (el modelo y la coleccion se instancian de forma perezosa).
 
 NOTA: desde el soporte de numeros de linea, las funciones de segmento devuelven
-tuplas (offset_0based, lineas) y _chunk_content devuelve (contenido, linea_1based).
+tuplas (offset_0based, lineas) y _chunk_content devuelve
+(contenido, start_line_1based, end_line_1based).
 """
 
 import indexer
@@ -156,7 +157,7 @@ def test_extract_symbols_no_code_ext():
     assert indexer._extract_symbols("# titulo\n", ".md") == ""
 
 
-# ---------- _chunk_content (devuelve tuplas content, start_line) ----------
+# ---------- _chunk_content (devuelve tuplas content, start_line, end_line) ----------
 
 def test_chunk_content_fallback_por_lineas():
     total = CHUNK_SIZE * 2  # fuerza mas de un chunk
@@ -164,7 +165,7 @@ def test_chunk_content_fallback_por_lineas():
     chunks = indexer._chunk_content(content, "modulo.py")
 
     assert len(chunks) > 1
-    # cada chunk es (contenido, start_line) y lleva el header con la ruta
+    # cada chunk es (contenido, start_line, end_line) y lleva el header con la ruta
     assert all(c[0].startswith("// modulo.py\n") for c in chunks)
     # el primer chunk empieza en la linea 1
     assert chunks[0][1] == 1
@@ -176,11 +177,13 @@ def test_chunk_content_fallback_overlap():
     chunks = indexer._chunk_content(content, "modulo.py")
 
     assert len(chunks) == 2
-    contenido_segundo, start_line_segundo = chunks[1]
+    contenido_segundo, start_line_segundo, end_line_segundo = chunks[1]
     # el avance entre chunks es CHUNK_SIZE - CHUNK_OVERLAP
     assert f"line {CHUNK_SIZE - CHUNK_OVERLAP}\n" in contenido_segundo
     # start_line es 1-based: la primera linea del segundo chunk
     assert start_line_segundo == (CHUNK_SIZE - CHUNK_OVERLAP) + 1
+    # end_line 1-based: la ultima linea del archivo (total lineas)
+    assert end_line_segundo == CHUNK_SIZE + 10
 
 
 def test_chunk_content_python_start_line_real():
@@ -196,8 +199,11 @@ def test_chunk_content_python_start_line_real():
     )
     chunks = indexer._chunk_content(src, "m.py")
     # preludio(1) + primera(3) + segunda(6)
-    start_lines = [sl for _, sl in chunks]
+    start_lines = [sl for _, sl, _ in chunks]
     assert start_lines == [1, 3, 6]
+    # rangos completos: preludio 1-2, primera 3-5, segunda 6-7
+    rangos = [(sl, el) for _, sl, el in chunks]
+    assert rangos == [(1, 2), (3, 5), (6, 7)]
 
 
 def test_chunk_content_archivo_corto_un_chunk():

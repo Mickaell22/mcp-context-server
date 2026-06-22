@@ -50,7 +50,7 @@ def _build_ephemeral_index(tmp_path, files: dict[str, str], pid: int) -> None:
     docs, ids, metas = [], [], []
     for rel, content in files.items():
         ext = Path(rel).suffix.lower()
-        for i, (chunk, start_line) in enumerate(indexer._chunk_content(content, rel)):
+        for i, (chunk, start_line, end_line) in enumerate(indexer._chunk_content(content, rel)):
             docs.append(chunk)
             ids.append(f"{pid}:{rel}:{i}")
             metas.append({
@@ -58,6 +58,7 @@ def _build_ephemeral_index(tmp_path, files: dict[str, str], pid: int) -> None:
                 "file_path": rel,
                 "chunk_index": i,
                 "start_line": start_line,
+                "end_line": end_line,
                 "symbols": indexer._extract_symbols(chunk, ext),
             })
     embeddings = model.encode(docs, show_progress_bar=False).tolist()

@@ -40,7 +40,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
     chunks = retriever.retrieve(query, project_ids, top_k=top_k, code_only=code_only)
 
     if not chunks:
-        return {"context": "", "files_referenced": [], "tokens_used": 0}
+        return {"context": "", "files_referenced": [], "locations": [], "tokens_used": 0}
 
     context, input_tokens, output_tokens, cost = deepseek_client.compress_context(query, chunks)
 
@@ -48,6 +48,20 @@ async def handle(args: dict, session_id: int | None) -> dict:
         f"{c['project_id']}:{c['file_path']}" if len(projects) > 1 else c["file_path"]
         for c in chunks
     ))
+
+    # Ubicaciones crudas (archivo + rango de lineas + simbolos) para poder ir
+    # directo a editar sin re-grepear. El 'context' comprimido pierde esta traza.
+    multi = len(projects) > 1
+    locations = [
+        {
+            "file": c["file_path"],
+            "start_line": c.get("start_line"),
+            "end_line": c.get("end_line"),
+            "symbols": c.get("symbols") or None,
+            **({"project_id": c["project_id"]} if multi else {}),
+        }
+        for c in chunks
+    ]
 
     if session_id is not None:
         log_query(
@@ -62,5 +76,6 @@ async def handle(args: dict, session_id: int | None) -> dict:
     return {
         "context": context,
         "files_referenced": files_referenced,
+        "locations": locations,
         "tokens_used": input_tokens + output_tokens,
     }
