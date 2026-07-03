@@ -8,6 +8,7 @@ import re
 from pathlib import Path
 from sentence_transformers import SentenceTransformer
 import chromadb
+import git
 
 import db
 import security
@@ -242,6 +243,41 @@ def _extract_imports(full_path: str, content: str, rel_path: str) -> list[dict]:
     return imports
 
 
+def _git_ignored_paths(project_path: str) -> set[str]:
+    """Paths (relativos al proyecto) que el propio git marca como ignorados por
+    .gitignore. Es la fuente de verdad de 'archivo generado' de cada ecosistema
+    (ios/Flutter/ephemeral, .dart_tool, coverage, etc.) sin mantener listas a mano.
+    Cubre el repo raíz o, si el proyecto es un directorio padre no-git, los repos
+    hijos de primer nivel. Sin repo git devuelve vacío (se indexa lo permitido)."""
+    if os.path.isdir(os.path.join(project_path, ".git")):
+        roots = [project_path]
+    else:
+        try:
+            roots = [
+                e.path for e in os.scandir(project_path)
+                if e.is_dir() and os.path.isdir(os.path.join(e.path, ".git"))
+            ]
+        except OSError:
+            return set()
+
+    ignored: set[str] = set()
+    for root in roots:
+        try:
+            # --directory colapsa dirs ignorados enteros en una sola entrada 'dir/'
+            out = git.Repo(root).git.ls_files(
+                "--others", "--ignored", "--exclude-standard", "--directory", "-z"
+            )
+        except Exception as e:
+            logger.warning("No se pudo consultar .gitignore en %s: %s", root, e)
+            continue
+        for entry in out.split("\0"):
+            if not entry:
+                continue
+            rel = os.path.relpath(os.path.join(root, entry.rstrip("/")), project_path)
+            ignored.add(rel)
+    return ignored
+
+
 def delete_project_chunks(project_id: int) -> None:
     """Borra todos los chunks de un proyecto de la coleccion de ChromaDB."""
     collection = _get_collection()
@@ -279,8 +315,15 @@ def index_project(
     new_metadatas: list[dict] = []
     skipped = 0
 
+    ignored = _git_ignored_paths(project_path)
+
     for root, dirs, files in os.walk(project_path):
-        dirs[:] = [d for d in dirs if not security.is_dir_blocked(d)]
+        rel_root = os.path.relpath(root, project_path)
+        dirs[:] = [
+            d for d in dirs
+            if not security.is_dir_blocked(d)
+            and os.path.normpath(os.path.join(rel_root, d)) not in ignored
+        ]
 
         for filename in files:
             full_path = os.path.join(root, filename)
@@ -290,6 +333,9 @@ def index_project(
                 continue
 
             rel_path = os.path.relpath(full_path, project_path)
+            if rel_path in ignored:
+                logger.debug("Ignorando %s: listado en .gitignore", full_path)
+                continue
 
             try:
                 file_hash = _file_hash(full_path)

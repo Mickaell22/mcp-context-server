@@ -6,7 +6,13 @@ import db
 import security
 import retriever
 import deepseek_client
-from config import AUDIT_TOP_K, AUDIT_MAX_CHUNKS
+from config import (
+    AUDIT_TOP_K,
+    AUDIT_MAX_CHUNKS,
+    AUDIT_RAW_MAX_CHARS,
+    AUDIT_VERIFY_ENABLED,
+    AUDIT_BATCH_MAX_CHARS,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -14,6 +20,17 @@ logger = logging.getLogger(__name__)
 _SEV_RE = re.compile(r"\*\*\[(CR[IÍ]TICO|ALTO|MEDIO|BAJO)\]\*\*\s*(.+)")
 _SEV_NORM = {"CRITICO": "CRÍTICO", "CRÍTICO": "CRÍTICO", "ALTO": "ALTO", "MEDIO": "MEDIO", "BAJO": "BAJO"}
 _SEV_ORDER = {"CRÍTICO": 0, "ALTO": 1, "MEDIO": 2, "BAJO": 3}
+
+# Dedupe entre categorías: el mismo problema suele salir en 2+ categorías con
+# otra redacción (ej. un except silenciado en security Y en error_handling).
+_LOCATION_RE = re.compile(r"`([^`\s]+:[\d\w–-]+)`")
+_WORD_RE = re.compile(r"[\wá-úÁ-Ú./:]+")
+_DEDUPE_JACCARD = 0.55
+
+
+def _finding_location(detail: str) -> str | None:
+    m = _LOCATION_RE.search(detail)
+    return m.group(1).lower() if m else None
 
 
 def _consolidate(report: dict) -> dict:
@@ -30,19 +47,152 @@ def _consolidate(report: dict) -> dict:
             sev = _SEV_NORM.get(m.group(1).upper(), m.group(1).upper())
             found.append({"severity": sev, "category": category, "detail": m.group(2).strip()})
 
-    seen: set[str] = set()
+    # Se ordena ANTES de dedupear para que sobreviva la copia de mayor severidad.
+    found.sort(key=lambda f: _SEV_ORDER.get(f["severity"], 9))
+
+    # Duplicado = misma cita `archivo:línea`, o redacción muy parecida (Jaccard de
+    # palabras) aunque venga de otra categoría.
+    # ponytail: scan O(n²) sobre decenas de hallazgos; si algún día n>500, indexar por archivo.
     uniq: list[dict] = []
+    kept_locs: list[str | None] = []
+    kept_words: list[set[str]] = []
     for f in found:
-        key = f["detail"][:80].lower()
-        if key not in seen:
-            seen.add(key)
+        loc = _finding_location(f["detail"])
+        words = set(_WORD_RE.findall(f["detail"].lower()))
+        dup = False
+        for kloc, kwords in zip(kept_locs, kept_words):
+            if loc and loc == kloc:
+                dup = True
+                break
+            union = len(words | kwords)
+            if union and len(words & kwords) / union >= _DEDUPE_JACCARD:
+                dup = True
+                break
+        if not dup:
             uniq.append(f)
-    uniq.sort(key=lambda f: _SEV_ORDER.get(f["severity"], 9))
+            kept_locs.append(loc)
+            kept_words.append(words)
 
     counts: dict[str, int] = {}
     for f in uniq:
         counts[f["severity"]] = counts.get(f["severity"], 0) + 1
     return {"total": len(uniq), "by_severity": counts, "top": uniq[:25]}
+
+# ---------- Verificación de hallazgos (segunda pasada anti-falsos-positivos) ----------
+# El auditor ve EXTRACTOS y a veces reporta como CRÍTICO cosas que el resto del
+# archivo desmiente (import "faltante" que existe, patrón idiomático marcado como
+# race). Esta pasada re-lee el archivo completo citado por cada CRÍTICO/ALTO y
+# pide veredicto. Una sola llamada DeepSeek extra por audit; fail-open (si la
+# llamada falla o el veredicto no parsea, el hallazgo se conserva).
+
+_VERIFY_MAX_FINDINGS = 12
+
+_VERIFY_INSTRUCTIONS = (
+    "Eres un revisor ESCÉPTICO de hallazgos de auditoría. Abajo van hallazgos numerados "
+    "y el código COMPLETO de los archivos que citan. Contrasta cada hallazgo contra el "
+    "código literal:\n"
+    "- CONFIRMADO: el código muestra exactamente el problema descrito.\n"
+    "- DESCARTADO: el código lo desmiente (el import/validación/manejo sí existe, el "
+    "patrón es correcto o idiomático del framework, o el hallazgo depende de un supuesto "
+    "que el código no respalda).\n"
+    "- REBAJADO A MEDIO o REBAJADO A BAJO: el problema existe pero la severidad está "
+    "inflada (no es pérdida de datos, brecha de seguridad ni crash demostrable).\n"
+    "Responde SOLO una línea por hallazgo, sin texto adicional:\n"
+    "N: CONFIRMADO|DESCARTADO|REBAJADO A MEDIO|REBAJADO A BAJO — motivo breve"
+)
+
+_VERDICT_RE = re.compile(
+    r"^\s*(\d+)\s*[:.\)]\s*(CONFIRMADO|DESCARTADO|REBAJADO\s+A\s+(?:MEDIO|BAJO))"
+    r"\s*(?:[—–-]\s*(.*))?$",
+    re.I | re.M,
+)
+
+
+def _verify_summary(project_id: int, summary: dict) -> tuple[int, int, float]:
+    """Verifica los hallazgos CRÍTICO/ALTO del summary contra el archivo completo
+    que citan. Muta summary: quita los DESCARTADOS (quedan en summary['descartados']),
+    rebaja severidades infladas y marca el veredicto en cada hallazgo. Retorna
+    (input_tokens, output_tokens, costo)."""
+    candidates = [f for f in summary["top"] if f["severity"] in ("CRÍTICO", "ALTO")]
+    candidates = candidates[:_VERIFY_MAX_FINDINGS]
+
+    # Resolver el archivo citado de cada hallazgo a paths indexados.
+    verifiable: list[dict] = []
+    files_needed: list[str] = []
+    for f in candidates:
+        loc = _finding_location(f["detail"])
+        if not loc:
+            continue
+        cited_file = loc.split(":", 1)[0]
+        matches = db.get_files_by_path_patterns(project_id, [f"%{cited_file}"])
+        if not matches:
+            continue
+        verifiable.append(f)
+        for m in matches[:2]:
+            if m not in files_needed:
+                files_needed.append(m)
+    if not verifiable:
+        return 0, 0, 0.0
+
+    # Código completo de los archivos citados, capado al presupuesto de la ventana.
+    context_chunks: list[dict] = []
+    used = 0
+    for fp in files_needed:
+        file_chunks = retriever.get_file_chunks(project_id, fp)
+        size = sum(len(c["content"]) for c in file_chunks)
+        if context_chunks and used + size > AUDIT_BATCH_MAX_CHARS:
+            break
+        for c in file_chunks:
+            context_chunks.append({**c, "file_path": fp})
+        used += size
+    if not context_chunks:
+        return 0, 0, 0.0
+
+    listado = "\n".join(
+        f"{i + 1}. [{f['severity']}] ({f['category']}) {f['detail']}"
+        for i, f in enumerate(verifiable)
+    )
+    prompt = (
+        f"{_VERIFY_INSTRUCTIONS}\n\n"
+        f"HALLAZGOS A VERIFICAR:\n{listado}\n\n"
+        f"CÓDIGO COMPLETO DE LOS ARCHIVOS CITADOS:\n\n"
+        f"{deepseek_client._build_fragments(context_chunks)}"
+    )
+    text, in_tok, out_tok, cost = deepseek_client._call(prompt, context_chunks)
+
+    verdicts: dict[int, tuple[str, str]] = {}
+    for m in _VERDICT_RE.finditer(text):
+        idx = int(m.group(1)) - 1
+        verdicts[idx] = (m.group(2).upper(), (m.group(3) or "").strip())
+
+    # Los conteos se ajustan de forma incremental: top está capado a 25 pero
+    # total/by_severity cuentan TODOS los hallazgos, no solo los del top.
+    counts = summary["by_severity"]
+    descartados: list[dict] = []
+    for i, f in enumerate(verifiable):
+        verdict, motivo = verdicts.get(i, ("CONFIRMADO", ""))
+        if verdict == "DESCARTADO":
+            f["verdict"] = "descartado"
+            f["motivo_descarte"] = motivo
+            descartados.append(f)
+            counts[f["severity"]] = counts.get(f["severity"], 1) - 1
+            summary["total"] -= 1
+        elif verdict.startswith("REBAJADO"):
+            f["verdict"] = "rebajado"
+            counts[f["severity"]] = counts.get(f["severity"], 1) - 1
+            f["severity"] = "BAJO" if verdict.endswith("BAJO") else "MEDIO"
+            counts[f["severity"]] = counts.get(f["severity"], 0) + 1
+        else:
+            f["verdict"] = "confirmado"
+
+    if descartados:
+        summary["top"] = [f for f in summary["top"] if f not in descartados]
+        summary["descartados"] = descartados
+    summary["by_severity"] = {k: v for k, v in counts.items() if v > 0}
+    summary["top"].sort(key=lambda f: _SEV_ORDER.get(f["severity"], 9))
+    summary["verificados"] = len(verifiable)
+    return in_tok, out_tok, cost
+
 
 # Pista compartida back/front: la búsqueda semántica engancha mal los bugs de
 # lógica (matchea comentarios antes que un `if x is not None`), así que la guía
@@ -260,6 +410,16 @@ CATEGORY_STRATEGY: dict[str, dict] = {
     "performance": {"prompt_hint": _PERFORMANCE_HINT},
     "state_management": {"prompt_hint": _STATE_MANAGEMENT_HINT},
     "error_handling": {"prompt_hint": _ERROR_HANDLING_HINT},
+    "imports": {
+        # Los chunks son extractos: el modelo reportaba "falta el import X" cuando
+        # el import existía en la cabecera (fuera del fragmento). Falso positivo real.
+        "prompt_hint": (
+            "Solo reporta problemas de imports DEMOSTRABLES dentro del fragmento: import "
+            "duplicado visible, dependencia circular evidente, import relativo frágil. "
+            "NUNCA reportes 'falta el import X' ni 'import no utilizado': el fragmento "
+            "casi nunca incluye la cabecera completa del archivo ni todos sus usos."
+        ),
+    },
     "theming": {
         # globals.css/tailwind.config completos para ver todos los tokens definidos.
         # import_patterns en %.css/%.scss trae chunk 0 de cada CSS (donde viven :root vars).
@@ -323,6 +483,29 @@ def _structural_chunks(project_id: int, patterns: list[str], first_chunk_only: b
     return chunks
 
 
+def _raw_fragments_within(chunks: list[dict], budget: float, category: str) -> tuple[str, int]:
+    """Fragmentos crudos de una categoría acotados al presupuesto de caracteres
+    restante. Corta en límite de chunk (nunca a mitad de código) y, si omite
+    chunks, lo dice y sugiere pedir la categoría sola. Retorna (texto, chars)."""
+    parts: list[str] = []
+    used = 0
+    for c in chunks:
+        frag = deepseek_client._build_fragments([c])
+        if parts and used + len(frag) > budget:
+            break
+        parts.append(frag)
+        used += len(frag)
+    omitted = len(chunks) - len(parts)
+    text = "\n\n---\n\n".join(parts)
+    if omitted:
+        text += (
+            f"\n\n[{omitted} de {len(chunks)} chunks omitidos por presupuesto "
+            f"(AUDIT_RAW_MAX_CHARS). Para verlos completos pide esta categoría sola: "
+            f"categories=['{category}'].]"
+        )
+    return text, used
+
+
 def _dedup(chunks: list[dict]) -> list[dict]:
     seen: set[tuple[str, int]] = set()
     result: list[dict] = []
@@ -370,7 +553,13 @@ def _gather_contract_chunks(project: dict, patterns: list[str], query: str, role
     return combined
 
 
-async def _contract_audit(project_a: dict, project_b: dict, session_id: int | None, raw: bool = False) -> dict:
+async def _contract_audit(
+    project_a: dict,
+    project_b: dict,
+    session_id: int | None,
+    raw: bool = False,
+    raw_budget: float = float("inf"),
+) -> dict:
     """Audita el contrato API entre dos proyectos pareados (frontend + backend)."""
     type_a = _detect_project_type(project_a["id"])
     type_b = _detect_project_type(project_b["id"])
@@ -390,7 +579,8 @@ async def _contract_audit(project_a: dict, project_b: dict, session_id: int | No
 
     files = list(dict.fromkeys(c["file_path"] for c in chunks))
     if raw:
-        return {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+        text, _ = _raw_fragments_within(chunks, raw_budget, "contracts")
+        return {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
 
     context, in_tok, out_tok, cost = deepseek_client.audit_context(_CONTRACT_INSTRUCTIONS, chunks)
 
@@ -430,7 +620,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
 
     # raw: devuelve los chunks crudos numerados sin compresión DeepSeek (alta fidelidad
     # para que el modelo que llama razone directamente sobre el código; coste 0 de LLM).
+    # El total va acotado por AUDIT_RAW_MAX_CHARS: sin tope, un repo mediano devuelve
+    # 300K+ chars que saturan el contexto del que llama.
     raw = bool(args.get("raw", False))
+    raw_budget_left: float = AUDIT_RAW_MAX_CHARS if AUDIT_RAW_MAX_CHARS > 0 else float("inf")
 
     # paired_with: proyecto hermano (front/back) para auditar el contrato API entre ambos
     paired_name = (args.get("paired_with") or "").strip()
@@ -483,7 +676,9 @@ async def handle(args: dict, session_id: int | None) -> dict:
                     chunks = all_chunks[:5]  # Use top 5 most relevant
                     files = list(dict.fromkeys(c["file_path"] for c in chunks))
                     if raw:
-                        report[category] = {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+                        text, used = _raw_fragments_within(chunks, raw_budget_left, category)
+                        raw_budget_left -= used
+                        report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
                         continue
                     fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
                     context, in_tok, out_tok, cost = deepseek_client.audit_context(fallback_instr, chunks)
@@ -504,7 +699,20 @@ async def handle(args: dict, session_id: int | None) -> dict:
             files = list(dict.fromkeys(c["file_path"] for c in chunks))
 
             if raw:
-                report[category] = {"findings": deepseek_client._build_fragments(chunks), "files_referenced": files, "tokens": 0, "raw": True}
+                if raw_budget_left <= 0:
+                    report[category] = {
+                        "findings": (
+                            f"[Presupuesto raw agotado (AUDIT_RAW_MAX_CHARS). Para ver esta "
+                            f"categoría pídela sola: categories=['{category}'].]"
+                        ),
+                        "files_referenced": files,
+                        "tokens": 0,
+                        "raw": True,
+                    }
+                    continue
+                text, used = _raw_fragments_within(chunks, raw_budget_left, category)
+                raw_budget_left -= used
+                report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
                 continue
 
             hint = strategy.get("prompt_hint", "")
@@ -539,7 +747,9 @@ async def handle(args: dict, session_id: int | None) -> dict:
     # Auditoría de contrato cross-repo (solo si se pasó paired_with)
     if paired_project is not None:
         try:
-            contract = await _contract_audit(project, paired_project, session_id, raw=raw)
+            contract = await _contract_audit(
+                project, paired_project, session_id, raw=raw, raw_budget=raw_budget_left
+            )
             total_input += contract.pop("_in", 0)
             total_output += contract.pop("_out", 0)
             total_cost += contract.pop("_cost", 0.0)
@@ -547,6 +757,20 @@ async def handle(args: dict, session_id: int | None) -> dict:
         except Exception as exc:
             logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
             report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
+
+    # Consolidación: ranking por severidad entre categorías (no aplica en modo raw)
+    summary = None
+    if not raw:
+        summary = _consolidate(report)
+        if AUDIT_VERIFY_ENABLED:
+            try:
+                v_in, v_out, v_cost = _verify_summary(project["id"], summary)
+                total_input += v_in
+                total_output += v_out
+                total_cost += v_cost
+            except Exception as exc:
+                # fail-open: la verificación nunca tumba el audit ni borra hallazgos
+                logger.error("Fallo en verificación de hallazgos: %s", exc, exc_info=True)
 
     result = {
         "project": project_name,
@@ -558,7 +782,6 @@ async def handle(args: dict, session_id: int | None) -> dict:
         "total_cost_usd": round(total_cost, 6),
         "audit": report,
     }
-    # Consolidación: ranking por severidad entre categorías (no aplica en modo raw)
-    if not raw:
-        result["summary"] = _consolidate(report)
+    if summary is not None:
+        result["summary"] = summary
     return result

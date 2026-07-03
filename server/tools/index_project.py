@@ -30,15 +30,21 @@ async def handle(args: dict, session_id: int | None) -> dict:
     # Doble confirmación ante drift git: si el local quedó detrás del remoto (o con
     # cambios sin commitear), indexar reflejaría una versión desactualizada del código.
     # Avisamos y exigimos acknowledge_drift=true para indexar de todos modos.
+    # Si el proyecto es un directorio padre no-git, el drift se evalúa sobre sus
+    # repos hijos de primer nivel (check_remote_status los devuelve en child_repos).
     git_status = git_client.check_remote_status(project["path"])
-    behind = git_status.get("behind", 0)
-    dirty = git_status.get("dirty", False)
-    if not acknowledge_drift and (behind > 0 or dirty):
-        motivos = []
-        if behind > 0:
-            motivos.append(f"el local está {behind} commit(s) DETRÁS de '{git_status.get('branch', 'origin')}' en el remoto")
-        if dirty:
-            motivos.append("hay cambios sin commitear en el working tree")
+    repos = {"el repo": git_status}
+    for name, s in git_status.get("child_repos", {}).items():
+        repos[f"'{name}'"] = s
+    motivos = []
+    for label, s in repos.items():
+        if s.get("behind", 0) > 0:
+            motivos.append(
+                f"{label} está {s['behind']} commit(s) DETRÁS de '{s.get('branch', 'origin')}' en el remoto"
+            )
+        if s.get("dirty", False):
+            motivos.append(f"{label} tiene cambios sin commitear en el working tree")
+    if not acknowledge_drift and motivos:
         return {
             "needs_confirmation": True,
             "project": project_name,
@@ -59,5 +65,5 @@ async def handle(args: dict, session_id: int | None) -> dict:
         "total_files": len(file_list),
         "mode": "incremental" if incremental else "full",
         "git_status": git_status,
-        "drift_acknowledged": bool(acknowledge_drift) if (behind > 0 or dirty) else False,
+        "drift_acknowledged": bool(acknowledge_drift) if motivos else False,
     }

@@ -59,10 +59,19 @@ AUDIT_SYSTEM_INSTRUCTIONS = (
     "no consejos genéricos. Formato obligatorio por hallazgo, uno por línea:\n"
     "  **[SEVERIDAD]** `archivo:línea` — qué está mal y por qué, en una frase. Fix: cómo arreglarlo.\n"
     "SEVERIDAD ∈ {CRÍTICO, ALTO, MEDIO, BAJO}. Ordena de mayor a menor severidad.\n"
+    "CRÍTICO se reserva para lo DEMOSTRABLE en el propio fragmento: pérdida de datos, "
+    "brecha de seguridad o crash seguro. Si tu hallazgo depende de un supuesto sobre "
+    "código que no ves, baja la severidad o no lo reportes.\n"
+    "Los fragmentos son EXTRACTOS parciales de cada archivo: NUNCA reportes que 'falta' "
+    "un import, una validación, un manejo de errores o una función — puede existir fuera "
+    "del fragmento. Reporta solo lo que el código visible demuestra por sí mismo.\n"
+    "No marques como bug los patrones idiomáticos correctos del framework en uso "
+    "(ej. updates atómicos bajo lock, decisiones documentadas en comentarios del código).\n"
     "Cita solo el snippet mínimo necesario (nunca pegues funciones completas).\n"
     "Si un fragmento no tiene problemas de la categoría auditada, ignóralo.\n"
     "Si NO hay ningún hallazgo real, responde exactamente: 'Sin hallazgos.'\n"
-    "No inventes líneas: si no estás seguro del número de línea, cita el nombre de la función o el snippet."
+    "No inventes líneas: si el fragmento no trae números de línea, cita `archivo` y el "
+    "nombre de la función (jamás 'chunk N')."
 )
 
 
@@ -80,8 +89,8 @@ def _build_fragments(chunks: list[dict]) -> str:
             meta += f" (líneas {start}-{end})"
         elif start:
             meta += f" (desde línea {start})"
-        elif "chunk_index" in c:
-            meta += f" (chunk {c['chunk_index']})"
+        # Sin start_line (índice viejo) no se anuncia el chunk_index: el modelo
+        # lo copiaba como cita ('archivo:chunk0') en vez de usar la función.
         if symbols:
             meta += f" — define: {symbols}"
 

@@ -131,6 +131,20 @@
       "category": "performance",
       "keywords": ["refrescar", "useCallback"],
       "desc": "handler inline trivial (onClick refrescar): NO debe sugerirse useCallback, memoizar de mas es sobre-optimizar"
+    },
+    {
+      "id": "noflag-import-fantasma",
+      "project": "backend",
+      "category": "imports",
+      "keywords": ["falta el import", "import faltante", "no esta importado", "no está importado", "sin importar"],
+      "desc": "los chunks de routers van por funcion (sin cabecera): el auditor NO debe inventar imports faltantes que viven fuera del fragmento (FP real observado)"
+    },
+    {
+      "id": "noflag-lock-correctness",
+      "project": "backend",
+      "category": "correctness",
+      "keywords": ["registrar_envio"],
+      "desc": "el contador de registrar_envio esta protegido por lock: NO es race condition (analogo al FP real de F() bajo select_for_update)"
     }
   ]
 }

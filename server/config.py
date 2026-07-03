@@ -65,6 +65,14 @@ AUDIT_BATCH_MAX_CHARS = int(os.getenv("AUDIT_BATCH_MAX_CHARS", "120000"))
 # Tope total de chunks por categoría (0 = sin tope, audita todo en lotes). Subilo
 # o capalo para controlar el costo en repos grandes; con 0 prioriza recall.
 AUDIT_MAX_CHUNKS = int(os.getenv("AUDIT_MAX_CHUNKS", "0"))
+# Presupuesto TOTAL de caracteres del audit en modo raw (todas las categorías
+# juntas). Sin tope, un repo mediano devuelve 300K+ chars que saturan el contexto
+# del modelo que llama. Al agotarse, las categorías restantes indican pedirse
+# solas con categories=[...]. 0 = sin tope.
+AUDIT_RAW_MAX_CHARS = int(os.getenv("AUDIT_RAW_MAX_CHARS", "150000"))
+# Segunda pasada de verificación de hallazgos CRÍTICO/ALTO contra el archivo
+# completo citado (anti-falsos-positivos). Una llamada DeepSeek extra por audit.
+AUDIT_VERIFY_ENABLED = os.getenv("AUDIT_VERIFY_ENABLED", "true").lower() != "false"
 MAX_DISTANCE = float(os.getenv("MAX_DISTANCE", "1.2"))  # cosine distance máximo (0=idéntico, 2=opuesto). MiniLM NL->código suele dar 0.6-1.1
 
 # Reranking híbrido (semántico + léxico) post-retrieval. Recupera un pool más

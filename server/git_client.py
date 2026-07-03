@@ -38,6 +38,18 @@ def check_remote_status(repo_path: str) -> dict:
     No lanza: ante cualquier fallo devuelve la info parcial que pudo obtener.
     """
     if not os.path.isdir(os.path.join(repo_path, ".git")):
+        # Un proyecto puede ser un directorio padre con repos hijos de primer nivel
+        # (ej. EcuaInventario/ con Backend/ y Frontend/): el drift vive en los hijos.
+        children: dict[str, dict] = {}
+        try:
+            entries = sorted(os.scandir(repo_path), key=lambda e: e.name)
+        except OSError:
+            return {"is_git": False}
+        for entry in entries:
+            if entry.is_dir() and os.path.isdir(os.path.join(entry.path, ".git")):
+                children[entry.name] = check_remote_status(entry.path)
+        if children:
+            return {"is_git": False, "child_repos": children}
         return {"is_git": False}
     try:
         repo = git.Repo(repo_path)
