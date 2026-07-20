@@ -1,0 +1,21 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="820" height="130" viewBox="0 0 820 130" fill="none" role="img" aria-label="MCP Context Server">
+  <defs>
+    <linearGradient id="shimmer" x1="0" y1="0" x2="320" y2="0" gradientUnits="userSpaceOnUse" spreadMethod="reflect">
+      <stop offset="0" stop-color="#6C5CE7"/>
+      <stop offset="0.5" stop-color="#39d3e8"/>
+      <stop offset="1" stop-color="#3fdd78"/>
+      <animateTransform attributeName="gradientTransform" type="translate" from="0 0" to="320 0" dur="3.2s" repeatCount="indefinite"/>
+    </linearGradient>
+  </defs>
+
+  <g>
+    <!-- flotado sutil de todo el nombre -->
+    <animateTransform attributeName="transform" type="translate" values="0 0; 0 -5; 0 0" dur="3.6s" repeatCount="indefinite" calcMode="spline" keySplines="0.4 0 0.2 1; 0.4 0 0.2 1" keyTimes="0; 0.5; 1"/>
+
+    <!-- emoji (color propio, ignora el gradiente) -->
+    <text x="120" y="82" font-family="'Segoe UI Emoji','Noto Color Emoji',sans-serif" font-size="56" text-anchor="middle">🧠</text>
+
+    <!-- wordmark con shimmer -->
+    <text x="166" y="82" font-family="'DejaVu Sans Mono','JetBrains Mono','Consolas',monospace" font-size="52" font-weight="bold" fill="url(#shimmer)">MCP Context Server</text>
+  </g>
+</svg>

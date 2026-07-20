@@ -4,7 +4,7 @@
 
 <br/>
 
-# 🧠 MCP Context Server
+<img src="./docs/screenshots/title.svg" alt="MCP Context Server" width="560"/>
 
 ### Memoria inteligente de proyectos para Claude Code — responde con contexto comprimido, no con archivos enteros.
 
