@@ -5,8 +5,15 @@ CREATE TABLE IF NOT EXISTS projects (
     repo_url        TEXT,
     cloned_at       TIMESTAMP,
     created_at      TIMESTAMP DEFAULT NOW(),
-    last_indexed_at TIMESTAMP
+    last_indexed_at TIMESTAMP,
+    -- Ruta local por dispositivo: {device_id: path}. Varios equipos comparten
+    -- esta Postgres pero cada uno tiene el repo en otra ruta. `path` queda como
+    -- fallback legacy; device_paths es la fuente por dispositivo.
+    device_paths    JSONB NOT NULL DEFAULT '{}'::jsonb
 );
+
+-- Migracion idempotente para bases ya creadas sin la columna.
+ALTER TABLE projects ADD COLUMN IF NOT EXISTS device_paths JSONB NOT NULL DEFAULT '{}'::jsonb;
 
 CREATE TABLE IF NOT EXISTS sessions (
     id          SERIAL PRIMARY KEY,

@@ -196,11 +196,19 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
 
 async def main():
-    logger.info("Iniciando MCP Context Server...")
+    from config import DEVICE_ID
+
+    logger.info("Iniciando MCP Context Server... (device_id=%s)", DEVICE_ID)
+
+    # Migracion idempotente + adopcion de rutas locales de este dispositivo.
+    db.ensure_device_paths_schema()
+    claimed = db.claim_local_paths(DEVICE_ID)
+    if claimed:
+        logger.info("Rutas locales adoptadas para %s: %d proyecto(s)", DEVICE_ID, claimed)
 
     paths = db.load_project_paths()
     security.load_allowed_paths(paths)
-    logger.info("Whitelist cargada: %d proyectos", len(paths))
+    logger.info("Whitelist cargada: %d rutas", len(paths))
 
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())

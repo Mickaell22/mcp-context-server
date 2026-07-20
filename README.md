@@ -211,6 +211,7 @@ sudo systemctl start mcp-context
 | `DEEPSEEK_API_KEY` | API key de DeepSeek |
 | `GITHUB_TOKEN` | Token de GitHub (scope: `repo`) para repos privados |
 | `DATABASE_URL` | PostgreSQL en Railway (URL publica para acceso externo) |
+| `DEVICE_ID` | Identificador de este equipo (ej. `desktop`, `laptop`). Como varios dispositivos comparten la misma Postgres, cada proyecto guarda una ruta local por dispositivo (`projects.device_paths`). Si se omite, se usa el hostname. Ver "Multi-dispositivo" abajo. |
 | `PROJECTS_BASE_PATH` | Directorio base donde se clonan los repos |
 | `CHROMA_PERSIST_PATH` | Directorio donde ChromaDB guarda los vectores en disco |
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
@@ -226,6 +227,23 @@ sudo systemctl start mcp-context
 | `RERANK_CANDIDATE_MULT` / `RERANK_W_SEM` / `RERANK_W_LEX` | Tamaño del pool de candidatos (`top_k × mult`, default 3) y pesos del score (default 0.7 semántico / 0.3 léxico). |
 
 Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
+
+## Multi-dispositivo (misma Postgres, varios equipos)
+
+Como varios equipos comparten la misma base en Railway pero tienen los repos en
+rutas distintas, cada proyecto guarda **una ruta por dispositivo** en la columna
+`projects.device_paths` (`{device_id: path}`). La columna `path` legacy queda
+como fallback.
+
+- Define `DEVICE_ID` distinto en el `.env` de cada equipo (ej. `desktop`, `laptop`).
+- Al arrancar, el server aplica la migracion (idempotente) y **adopta** para este
+  dispositivo las rutas legacy que existan en su disco (`claim_local_paths`).
+- `register_project` sobre un proyecto ya registrado en otro equipo **no lo pisa**:
+  solo agrega la ruta local de este dispositivo.
+- `list_projects` devuelve la ruta de este dispositivo y un flag `on_this_device`;
+  si es `false`, registra el proyecto aca con `register_project` apuntando a su
+  ruta local. Las queries (`query_context`, `find_usages`, `audit_project`) leen
+  de Chroma por `project_id`, asi que funcionan desde cualquier equipo sin re-registrar.
 
 ---
 

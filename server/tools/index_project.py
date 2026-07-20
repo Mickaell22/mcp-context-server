@@ -4,6 +4,7 @@ import db
 import security
 import indexer
 import git_client
+from config import DEVICE_ID
 
 
 async def handle(args: dict, session_id: int | None) -> dict:
@@ -18,21 +19,32 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if not project:
         return {"error": f"Proyecto '{project_name}' no encontrado en la base de datos"}
 
+    # Ruta local para ESTE dispositivo (varios equipos comparten la misma DB con
+    # el repo en rutas distintas). El indexado lee del disco, asi que usamos la
+    # ruta de este dispositivo, no la de otro.
+    path = db.resolve_project_path(project, DEVICE_ID)
+
     # Validamos contra la whitelist (no contra PROJECTS_BASE_PATH): un proyecto
     # registrado fuera de la base sigue siendo re-indexable. Lo unico que exigimos
     # es que su ruta este permitida y siga existiendo en disco.
-    if not security.is_path_allowed(project["path"]):
-        return {"error": f"Proyecto '{project_name}' no esta en la whitelist: {project['path']}"}
+    if not security.is_path_allowed(path):
+        return {"error": f"Proyecto '{project_name}' no esta en la whitelist: {path}"}
 
-    if not os.path.isdir(project["path"]):
-        return {"error": f"La ruta del proyecto ya no existe en disco: {project['path']}"}
+    if not os.path.isdir(path):
+        return {
+            "error": (
+                f"La ruta del proyecto no existe en este dispositivo ({DEVICE_ID}): {path}. "
+                "Probablemente esta registrado en otro equipo. Registralo aca con "
+                "register_project apuntando a su ruta local en esta maquina."
+            )
+        }
 
     # Doble confirmación ante drift git: si el local quedó detrás del remoto (o con
     # cambios sin commitear), indexar reflejaría una versión desactualizada del código.
     # Avisamos y exigimos acknowledge_drift=true para indexar de todos modos.
     # Si el proyecto es un directorio padre no-git, el drift se evalúa sobre sus
     # repos hijos de primer nivel (check_remote_status los devuelve en child_repos).
-    git_status = git_client.check_remote_status(project["path"])
+    git_status = git_client.check_remote_status(path)
     repos = {"el repo": git_status}
     for name, s in git_status.get("child_repos", {}).items():
         repos[f"'{name}'"] = s
@@ -57,7 +69,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
             ),
         }
 
-    files_indexed, file_list = indexer.index_project(project["id"], project["path"], incremental=incremental)
+    files_indexed, file_list = indexer.index_project(project["id"], path, incremental=incremental)
 
     return {
         "project": project_name,

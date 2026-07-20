@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import json
+import os
+
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
@@ -24,11 +27,70 @@ def cursor():
         conn.close()
 
 
+# ---------- schema / multi-dispositivo ----------
+
+def ensure_device_paths_schema() -> None:
+    """Migracion idempotente: agrega la columna device_paths si falta.
+
+    Varios equipos comparten esta Postgres; cada uno corre el server y ejecuta
+    esto al arrancar. ADD COLUMN IF NOT EXISTS es seguro y no destructivo.
+    """
+    with cursor() as cur:
+        cur.execute(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
+            "device_paths JSONB NOT NULL DEFAULT '{}'::jsonb"
+        )
+
+
+def claim_local_paths(device_id: str) -> int:
+    """Adopta para este dispositivo las rutas legacy que existan en ESTE disco.
+
+    Para cada proyecto sin entrada para device_id cuyo `path` legacy apunte a un
+    directorio existente localmente, guarda device_paths[device_id] = path. Nunca
+    reclama rutas que no existen aca (asi no se atribuye la ruta de otro equipo).
+    Devuelve cuantos proyectos reclamo.
+    """
+    claimed = 0
+    with cursor() as cur:
+        cur.execute("SELECT id, path, device_paths FROM projects")
+        rows = cur.fetchall()
+        for r in rows:
+            dp = r["device_paths"] or {}
+            if device_id in dp:
+                continue
+            p = r["path"]
+            if p and os.path.isdir(p):
+                cur.execute(
+                    "UPDATE projects SET device_paths = device_paths || %s::jsonb WHERE id = %s",
+                    (json.dumps({device_id: os.path.realpath(p)}), r["id"]),
+                )
+                claimed += 1
+    return claimed
+
+
+def set_device_path(project_id: int, device_id: str, path: str) -> None:
+    """Registra/actualiza la ruta local de un proyecto para un dispositivo."""
+    with cursor() as cur:
+        cur.execute(
+            "UPDATE projects SET device_paths = device_paths || %s::jsonb WHERE id = %s",
+            (json.dumps({device_id: os.path.realpath(path)}), project_id),
+        )
+
+
+def resolve_project_path(project: dict, device_id: str) -> str:
+    """Ruta local del proyecto para este dispositivo, con fallback al path legacy."""
+    dp = project.get("device_paths") or {}
+    return dp.get(device_id) or project["path"]
+
+
 # ---------- projects ----------
 
 def get_all_projects() -> list[dict]:
     with cursor() as cur:
-        cur.execute("SELECT id, name, path, repo_url, last_indexed_at FROM projects ORDER BY name")
+        cur.execute(
+            "SELECT id, name, path, device_paths, repo_url, last_indexed_at "
+            "FROM projects ORDER BY name"
+        )
         return [dict(r) for r in cur.fetchall()]
 
 
@@ -202,9 +264,22 @@ def log_blocked_attempt(session_id: int | None, attempted_path: str, reason: str
 # ---------- whitelist bootstrap ----------
 
 def load_project_paths() -> list[str]:
+    """Todas las rutas conocidas para la whitelist: el path legacy MAS las rutas
+    por dispositivo de todos los equipos. Asi un proyecto registrado desde otra
+    maquina sigue pasando el gate de whitelist (las queries leen de Chroma por
+    project_id, no del disco)."""
     with cursor() as cur:
-        cur.execute("SELECT path FROM projects")
-        return [row["path"] for row in cur.fetchall()]
+        cur.execute(
+            """
+            SELECT DISTINCT p FROM (
+                SELECT path AS p FROM projects WHERE path IS NOT NULL AND path <> ''
+                UNION
+                SELECT dp.value AS p
+                FROM projects, jsonb_each_text(projects.device_paths) AS dp
+            ) q
+            """
+        )
+        return [row["p"] for row in cur.fetchall()]
 
 
 def get_files_by_path_patterns(project_id: int, patterns: list[str]) -> list[str]:

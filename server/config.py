@@ -1,4 +1,5 @@
 import os
+import socket
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -33,6 +34,11 @@ DATABASE_URL = _require("DATABASE_URL")
 # Rutas locales
 PROJECTS_BASE_PATH = _require("PROJECTS_BASE_PATH")
 CHROMA_PERSIST_PATH = _require("CHROMA_PERSIST_PATH")
+
+# Identificador de este dispositivo. Varios equipos comparten la misma Postgres,
+# asi que cada proyecto guarda una ruta local por dispositivo. Si no se define
+# DEVICE_ID en el entorno, se usa el hostname (estable en la mayoria de equipos).
+DEVICE_ID = os.getenv("DEVICE_ID") or socket.gethostname()
 
 # Logging
 LOG_LEVEL = os.environ.get("LOG_LEVEL", "INFO")
