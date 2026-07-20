@@ -1,8 +1,33 @@
-# MCP Context Server
+<div align="center">
 
-Servidor MCP que actua como memoria inteligente de proyectos para Claude Code. Indexa codebases, responde queries con contexto relevante comprimido y registra metricas de uso. Reduce el consumo de tokens en Claude Code usando DeepSeek Flash como preprocesador barato en lugar de mandar archivos completos al contexto.
+<img src="./docs/screenshots/dashboard.png" alt="MCP Context Server — list_projects en accion" width="820"/>
 
----
+<br/>
+
+# 🧠 MCP Context Server
+
+### Memoria inteligente de proyectos para Claude Code — responde con contexto comprimido, no con archivos enteros.
+
+**Indexa tu codebase y busca por similitud semantica; DeepSeek Flash comprime lo relevante antes de que llegue al contexto.**
+<br/>
+**Menos tokens en Claude Code, mismo contexto util. 9 tools MCP, metricas de uso en PostgreSQL.**
+
+<br/>
+
+<h3>⭐ Dale una estrella si te ahorro tokens.</h3>
+
+[![Stars](https://img.shields.io/github/stars/Mickaell22/mcp-context-server?style=social)](https://github.com/Mickaell22/mcp-context-server)
+
+<br/>
+
+[![9 Tools MCP](https://img.shields.io/badge/9-Tools_MCP-6C5CE7?style=for-the-badge)](#tools-mcp)
+[![Compresion de contexto](https://img.shields.io/badge/Contexto-Comprimido-00B894?style=for-the-badge)](#como-funciona)
+[![Auditoria de codigo](https://img.shields.io/badge/Auditoria-de_codigo-E17055?style=for-the-badge)](#tools-mcp)
+[![Local-first](https://img.shields.io/badge/Local--first-Tailscale-245EFF?style=for-the-badge)](#seguridad)
+
+<br/>
+
+### 🧩 Stack
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-SDK-blueviolet?style=for-the-badge&logo=anthropic&logoColor=white)](https://modelcontextprotocol.io)
@@ -10,6 +35,21 @@ Servidor MCP que actua como memoria inteligente de proyectos para Claude Code. I
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vectores-FF6B35?style=for-the-badge&logo=databricks&logoColor=white)](https://trychroma.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Railway-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://railway.com)
 [![Tailscale](https://img.shields.io/badge/Acceso-Tailscale-245EFF?style=for-the-badge&logo=tailscale&logoColor=white)](https://tailscale.com)
+
+<!-- TODO: no hay archivo LICENSE en el repo. Si agregas uno, descomenta el badge:
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE) -->
+
+<br/>
+
+[**🚀 Instalacion**](#instalacion) • [**🛠️ Tools MCP**](#tools-mcp) • [**⚙️ Como funciona**](#como-funciona) • [**🧩 Stack**](#stack) • [**🌐 Dashboard**](https://ia.novamicktools.com)
+
+[**🔧 Config en Claude Code**](#configuracion-en-claude-code) • [**🔑 Variables de entorno**](#variables-de-entorno) • [**🧪 Tests**](#tests-y-evaluación) • [**🔒 Seguridad**](#seguridad)
+
+</div>
+
+---
+
+Servidor MCP que actua como memoria inteligente de proyectos para Claude Code. Indexa codebases, responde queries con contexto relevante comprimido y registra metricas de uso. Reduce el consumo de tokens en Claude Code usando DeepSeek Flash como preprocesador barato en lugar de mandar archivos completos al contexto.
 
 ---
 
