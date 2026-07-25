@@ -18,7 +18,10 @@ def _require(key: str) -> str:
 # DeepSeek
 DEEPSEEK_API_KEY = _require("DEEPSEEK_API_KEY")
 DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
-DEEPSEEK_MODEL = "deepseek-chat"
+# DeepSeek retira nombres de modelo sin avisar: "deepseek-chat" quedo invalido y
+# la API responde 400, lo que hacia caer todas las llamadas al fallback de chunks
+# crudos (coste 0, summary vacio) sin que se notara. Configurable por entorno.
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "4096"))
 DEEPSEEK_MAX_RETRIES = int(os.getenv("DEEPSEEK_MAX_RETRIES", "2"))
 DEEPSEEK_TIMEOUT = float(os.getenv("DEEPSEEK_TIMEOUT", "60.0"))
