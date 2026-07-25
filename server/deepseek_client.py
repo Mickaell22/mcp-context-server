@@ -120,7 +120,17 @@ def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:
                 max_tokens=DEEPSEEK_MAX_TOKENS,
                 messages=[{"role": "user", "content": prompt}],
             )
-            content = response.content[0].text
+            # Los modelos v4 anteponen un bloque `thinking` al `text`, asi que
+            # content[0] no siempre es texto: se concatenan solo los bloques de
+            # texto. Leer content[0].text a ciegas tiraba AttributeError sobre
+            # una respuesta 200 valida, y el except de abajo lo reportaba como
+            # "DeepSeek no disponible".
+            content = "".join(b.text for b in response.content if b.type == "text")
+            if not content:
+                raise ValueError(
+                    f"Respuesta sin bloque de texto (bloques: "
+                    f"{[b.type for b in response.content]})"
+                )
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
             cost = (input_tokens * COST_INPUT_PER_TOKEN) + (output_tokens * COST_OUTPUT_PER_TOKEN)
