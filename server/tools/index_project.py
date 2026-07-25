@@ -71,10 +71,14 @@ async def handle(args: dict, session_id: int | None) -> dict:
 
     files_indexed, file_list = indexer.index_project(project["id"], path, incremental=incremental)
 
+    # `files_indexed: 0` por si solo es ambiguo ("nada cambio" vs "no vi lo que
+    # cambio"): exponemos tambien cuantos archivos se escanearon y cuantos se
+    # saltaron por hash igual, para poder distinguirlo sin leer el codigo.
     return {
         "project": project_name,
         "files_indexed": files_indexed,
         "total_files": len(file_list),
+        "skipped_unchanged": len(file_list) - files_indexed,
         "mode": "incremental" if incremental else "full",
         "git_status": git_status,
         "drift_acknowledged": bool(acknowledge_drift) if motivos else False,

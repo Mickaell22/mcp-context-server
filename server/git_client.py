@@ -8,15 +8,71 @@ from config import PROJECTS_BASE_PATH, GITHUB_TOKEN
 logger = logging.getLogger(__name__)
 
 
+# Prefijos de los tokens de GitHub (PAT clasico, fine-grained, OAuth, app...).
+# Sirven para reconocer un token persistido por error en remote.origin.url.
+_TOKEN_PREFIXES = ("ghp_", "gho_", "ghu_", "ghs_", "ghr_", "github_pat_")
+
+
+def _redact(text: str) -> str:
+    """Oculta el token en textos que se devuelven al cliente (git lo incluye
+    en los mensajes de error junto a la URL completa)."""
+    return text.replace(GITHUB_TOKEN, "***") if GITHUB_TOKEN else text
+
+
 def _inject_token(repo_url: str) -> str:
+    """URL con el token para autenticar contra GitHub. Solo en memoria: el
+    resultado nunca se persiste en `.git/config` (ver `_clean_persisted_url`).
+
+    Es idempotente: descarta el userinfo que la URL ya traiga, asi que aplicarlo
+    sobre una URL ya tokenizada no acumula credenciales.
+    """
     if not GITHUB_TOKEN:
         return repo_url
     parsed = urlparse(repo_url)
-    # solo inyectar token en repos de GitHub via HTTPS
-    if parsed.scheme not in ("http", "https") or "github.com" not in parsed.netloc:
+    host = parsed.netloc.rsplit("@", 1)[-1]  # descarta cualquier userinfo previo
+    hostname = host.rsplit(":", 1)[0].strip("[]").lower()
+    # solo inyectar token en repos de GitHub via HTTPS. Se compara el host exacto
+    # (no `"github.com" in netloc`): un host tipo github.com.atacante.net no debe
+    # recibir el token.
+    if parsed.scheme not in ("http", "https"):
         return repo_url
-    authed = parsed._replace(netloc=f"{GITHUB_TOKEN}@{parsed.netloc}")
+    if hostname != "github.com" and not hostname.endswith(".github.com"):
+        return repo_url
+    authed = parsed._replace(netloc=f"{GITHUB_TOKEN}@{host}")
     return authed.geturl()
+
+
+def _clean_persisted_url(origin) -> str:
+    """Devuelve la URL del remoto sin credenciales y, si habia un token escrito
+    en `.git/config`, lo borra de disco.
+
+    Repara los repos afectados por el bug historico de acumulacion (un
+    `set_url(_inject_token(...))` por indexado dejaba
+    `https://ghp_x@ghp_x@github.com/...`, que ademas rompia el fetch).
+    Un userinfo que no parezca token (ej. `https://usuario@github.com/...`) se
+    respeta: no es cosa nuestra tocarlo.
+    """
+    url = origin.url
+    parsed = urlparse(url)
+    if parsed.scheme not in ("http", "https") or "@" not in parsed.netloc:
+        return url
+    userinfo = parsed.netloc.rsplit("@", 1)[0]
+    looks_like_token = any(p in userinfo for p in _TOKEN_PREFIXES) or (
+        bool(GITHUB_TOKEN) and GITHUB_TOKEN in userinfo
+    )
+    if not looks_like_token:
+        return url
+    clean = parsed._replace(netloc=parsed.netloc.rsplit("@", 1)[-1]).geturl()
+    try:
+        origin.set_url(clean)
+        logger.warning(
+            "Se elimino un token de GitHub persistido en remote.%s.url (%s). "
+            "Considera rotarlo: estuvo en texto plano en .git/config.",
+            origin.name, clean,
+        )
+    except Exception:
+        pass  # si no se puede escribir, seguimos con la URL limpia en memoria
+    return clean
 
 
 def extract_repo_name(repo_url: str) -> str:
@@ -59,15 +115,17 @@ def check_remote_status(repo_path: str) -> dict:
             return {"is_git": True, "has_remote": False, "dirty": dirty}
 
         origin = repo.remotes.origin
-        # inyectar token para poder hacer fetch de repos privados
+        # El token se pasa como URL explicita al fetch: vive solo en memoria y
+        # nunca se escribe en .git/config (era una fuga de secreto, y ademas se
+        # acumulaba un token por llamada hasta romper el fetch).
+        # El refspec replica lo que hace `git fetch origin` por defecto: sin el,
+        # `git fetch <url>` solo actualiza FETCH_HEAD y refs/remotes/origin/*
+        # quedaria viejo, falseando el calculo de behind/ahead.
+        fetch_url = _inject_token(_clean_persisted_url(origin))
         try:
-            origin.set_url(_inject_token(origin.url))
-        except Exception:
-            pass
-        try:
-            origin.fetch()
+            repo.git.fetch(fetch_url, f"+refs/heads/*:refs/remotes/{origin.name}/*")
         except Exception as e:
-            return {"is_git": True, "has_remote": True, "dirty": dirty, "fetch_error": str(e)}
+            return {"is_git": True, "has_remote": True, "dirty": dirty, "fetch_error": _redact(str(e))}
 
         try:
             branch = repo.active_branch
@@ -89,7 +147,7 @@ def check_remote_status(repo_path: str) -> dict:
             "ahead": ahead,
         }
     except Exception as e:
-        return {"is_git": True, "error": str(e)}
+        return {"is_git": True, "error": _redact(str(e))}
 
 
 def clone_repo(repo_url: str) -> tuple[str, str]:
@@ -106,12 +164,18 @@ def clone_repo(repo_url: str) -> tuple[str, str]:
         logger.info("Repo ya existe en %s, haciendo pull...", dest)
         repo = git.Repo(dest)
         origin = repo.remotes.origin
-        # actualizar la URL con token por si cambio
-        origin.set_url(auth_url)
-        origin.pull()
+        # pull contra la URL autenticada explicita: el token no se persiste en
+        # .git/config (y de paso se limpia si quedo uno de una version anterior).
+        _clean_persisted_url(origin)
+        repo.git.pull(auth_url)
     else:
         logger.info("Clonando %s en %s...", repo_url, dest)
         os.makedirs(PROJECTS_BASE_PATH, exist_ok=True)
-        git.Repo.clone_from(auth_url, dest)
+        repo = git.Repo.clone_from(auth_url, dest)
+        # clone_from deja la URL de origen (con token) escrita en .git/config
+        try:
+            repo.remotes.origin.set_url(repo_url)
+        except Exception:
+            pass
 
     return name, dest

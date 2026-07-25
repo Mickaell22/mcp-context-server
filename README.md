@@ -87,7 +87,7 @@ DeepSeek Flash API  ────────────────────
 | Tool | Parametros | Descripcion |
 |---|---|---|
 | `query_context` | `query`, `project` (str o list), `code_only` (bool), `top_k` (int, opcional) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. `top_k` por defecto 8; subelo en proyectos grandes. |
-| `index_project` | `project`, `incremental` (bool), `acknowledge_drift` (bool) | Re-indexa un proyecto existente por nombre. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear); si lo detecta devuelve `needs_confirmation` y no indexa hasta reintentar con `acknowledge_drift=true`. |
+| `index_project` | `project`, `incremental` (bool), `acknowledge_drift` (bool) | Re-indexa un proyecto existente por nombre. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear); si lo detecta devuelve `needs_confirmation` y no indexa hasta reintentar con `acknowledge_drift=true`. Responde con `files_indexed`, `total_files` y `skipped_unchanged` (archivos escaneados cuyo hash no cambio), para distinguir "no habia nada que hacer" de "no vio el cambio". |
 | `list_projects` | — | Lista todos los proyectos registrados en la BD. |
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
