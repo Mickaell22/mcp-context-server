@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+from datetime import datetime
 
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
-from config import DATABASE_URL
+from config import DATABASE_URL, DEVICE_ID
 
 
 def get_connection():
@@ -29,16 +30,35 @@ def cursor():
 
 # ---------- schema / multi-dispositivo ----------
 
-def ensure_device_paths_schema() -> None:
-    """Migracion idempotente: agrega la columna device_paths si falta.
+def ensure_schema() -> None:
+    """Migraciones idempotentes sobre la Postgres compartida.
 
     Varios equipos comparten esta Postgres; cada uno corre el server y ejecuta
     esto al arrancar. ADD COLUMN IF NOT EXISTS es seguro y no destructivo.
+
+    - projects.device_paths: ruta local del proyecto por dispositivo.
+    - indexed_files.device_id: DE QUE dispositivo es ese estado indexado. Los
+      vectores viven en un ChromaDB local por equipo, asi que los hashes que
+      alimentan el delta indexing describen el indice de UN equipo, no un hecho
+      global. Sin esta columna, el equipo A marcaba los archivos como indexados
+      y el equipo B se saltaba el reindexado creyendolos al dia, sirviendo
+      codigo viejo (o nada) desde su Chroma.
+    - projects.device_indexed_at: cuando indexo CADA equipo, para que
+      list_projects no muestre como reciente el indexado de otra maquina.
     """
     with cursor() as cur:
         cur.execute(
             "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
             "device_paths JSONB NOT NULL DEFAULT '{}'::jsonb"
+        )
+        cur.execute(
+            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
+            "device_indexed_at JSONB NOT NULL DEFAULT '{}'::jsonb"
+        )
+        cur.execute("ALTER TABLE indexed_files ADD COLUMN IF NOT EXISTS device_id TEXT")
+        cur.execute(
+            "CREATE INDEX IF NOT EXISTS idx_indexed_files_device "
+            "ON indexed_files(project_id, device_id)"
         )
 
 
@@ -88,7 +108,7 @@ def resolve_project_path(project: dict, device_id: str) -> str:
 def get_all_projects() -> list[dict]:
     with cursor() as cur:
         cur.execute(
-            "SELECT id, name, path, device_paths, repo_url, last_indexed_at "
+            "SELECT id, name, path, device_paths, device_indexed_at, repo_url, last_indexed_at "
             "FROM projects ORDER BY name"
         )
         return [dict(r) for r in cur.fetchall()]
@@ -115,11 +135,18 @@ def insert_project(name: str, path: str, repo_url: str | None = None) -> int:
         return cur.fetchone()["id"]
 
 
-def update_last_indexed(project_id: int) -> None:
+def update_last_indexed(project_id: int, device_id: str = DEVICE_ID) -> None:
+    """Marca el proyecto como indexado ahora, global y para ESTE dispositivo.
+
+    last_indexed_at queda como "alguien lo indexo" (compat); device_indexed_at
+    es el dato util: el indice de Chroma es local, asi que solo cuenta cuando lo
+    indexo esta maquina.
+    """
     with cursor() as cur:
         cur.execute(
-            "UPDATE projects SET last_indexed_at = NOW() WHERE id = %s",
-            (project_id,),
+            "UPDATE projects SET last_indexed_at = NOW(), "
+            "device_indexed_at = device_indexed_at || %s::jsonb WHERE id = %s",
+            (json.dumps({device_id: datetime.now().isoformat()}), project_id),
         )
 
 
@@ -188,24 +215,43 @@ def log_query(
 
 # ---------- indexed_files ----------
 
-def log_indexed_files(project_id: int, files: list[dict]) -> None:
-    """files: lista de {file_path, file_size, content_hash?}"""
+def log_indexed_files(project_id: int, files: list[dict], device_id: str = DEVICE_ID) -> None:
+    """files: lista de {file_path, file_size, content_hash?}
+
+    Reemplaza SOLO el estado de este dispositivo (mas las filas legacy sin
+    device_id, que se consumen en el primer reindex). Antes borraba todas las
+    filas del proyecto, con lo que cada equipo pisaba los hashes del otro.
+    """
     with cursor() as cur:
-        cur.execute("DELETE FROM indexed_files WHERE project_id = %s", (project_id,))
+        cur.execute(
+            "DELETE FROM indexed_files WHERE project_id = %s "
+            "AND (device_id = %s OR device_id IS NULL)",
+            (project_id, device_id),
+        )
         if files:
             psycopg2.extras.execute_values(
                 cur,
-                "INSERT INTO indexed_files (project_id, file_path, file_size, content_hash) VALUES %s",
-                [(project_id, f["file_path"], f["file_size"], f.get("content_hash")) for f in files],
+                "INSERT INTO indexed_files (project_id, device_id, file_path, file_size, content_hash) VALUES %s",
+                [
+                    (project_id, device_id, f["file_path"], f["file_size"], f.get("content_hash"))
+                    for f in files
+                ],
             )
 
 
-def get_file_hashes(project_id: int) -> dict[str, str]:
-    """Retorna {file_path: content_hash} para todos los archivos indexados del proyecto."""
+def get_file_hashes(project_id: int, device_id: str = DEVICE_ID) -> dict[str, str]:
+    """Retorna {file_path: content_hash} de lo indexado por ESTE dispositivo.
+
+    Filtro estricto por device_id: las filas legacy (device_id NULL) se ignoran
+    a proposito, porque no se sabe que Chroma describen. Asi el primer
+    incremental de cada equipo tras la migracion se comporta como un full y
+    reconstruye su indice local.
+    """
     with cursor() as cur:
         cur.execute(
-            "SELECT file_path, content_hash FROM indexed_files WHERE project_id = %s AND content_hash IS NOT NULL",
-            (project_id,),
+            "SELECT file_path, content_hash FROM indexed_files "
+            "WHERE project_id = %s AND device_id = %s AND content_hash IS NOT NULL",
+            (project_id, device_id),
         )
         return {row["file_path"]: row["content_hash"] for row in cur.fetchall()}
 
@@ -282,26 +328,34 @@ def load_project_paths() -> list[str]:
         return [row["p"] for row in cur.fetchall()]
 
 
-def get_files_by_path_patterns(project_id: int, patterns: list[str]) -> list[str]:
+# Las lecturas estructurales toleran filas legacy (device_id NULL): describen
+# QUE archivos tiene el repo, no el estado del Chroma local, y un indice viejo
+# sigue siendo mejor que devolver nada mientras el equipo no reindexa.
+_DEVICE_FILTER = "(device_id = %s OR device_id IS NULL)"
+
+
+def get_files_by_path_patterns(
+    project_id: int, patterns: list[str], device_id: str = DEVICE_ID
+) -> list[str]:
     """Retorna file_paths que coinciden con cualquiera de los patrones ILIKE."""
     if not patterns:
         return []
     with cursor() as cur:
         conditions = " OR ".join(["file_path ILIKE %s"] * len(patterns))
         cur.execute(
-            f"SELECT DISTINCT file_path FROM indexed_files WHERE project_id = %s AND ({conditions}) ORDER BY file_path",
-            [project_id, *patterns],
+            f"SELECT DISTINCT file_path FROM indexed_files WHERE project_id = %s "
+            f"AND {_DEVICE_FILTER} AND ({conditions}) ORDER BY file_path",
+            [project_id, device_id, *patterns],
         )
         return [row["file_path"] for row in cur.fetchall()]
 
 
-def get_file_extensions(project_id: int) -> dict[str, int]:
+def get_file_extensions(project_id: int, device_id: str = DEVICE_ID) -> dict[str, int]:
     """Retorna {extension: count} de archivos indexados del proyecto."""
-    import os
     with cursor() as cur:
         cur.execute(
-            "SELECT file_path FROM indexed_files WHERE project_id = %s",
-            (project_id,),
+            f"SELECT file_path FROM indexed_files WHERE project_id = %s AND {_DEVICE_FILTER}",
+            (project_id, device_id),
         )
         counts: dict[str, int] = {}
         for row in cur.fetchall():

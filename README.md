@@ -88,7 +88,7 @@ DeepSeek Flash API  ────────────────────
 |---|---|---|
 | `query_context` | `query`, `project` (str o list), `code_only` (bool), `top_k` (int, opcional) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. `top_k` por defecto 8; subelo en proyectos grandes. |
 | `index_project` | `project`, `incremental` (bool), `acknowledge_drift` (bool) | Re-indexa un proyecto existente por nombre. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear); si lo detecta devuelve `needs_confirmation` y no indexa hasta reintentar con `acknowledge_drift=true`. Responde con `files_indexed`, `total_files` y `skipped_unchanged` (archivos escaneados cuyo hash no cambio), para distinguir "no habia nada que hacer" de "no vio el cambio". |
-| `list_projects` | — | Lista todos los proyectos registrados en la BD. |
+| `list_projects` | — | Lista todos los proyectos registrados en la BD (desde cualquier maquina). `indexed_here` + `last_indexed` indican si ESTE equipo lo tiene indexado en su Chroma local; `last_indexed_anywhere` es el global. |
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
 | `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
@@ -243,8 +243,14 @@ como fallback.
   solo agrega la ruta local de este dispositivo.
 - `list_projects` devuelve la ruta de este dispositivo y un flag `on_this_device`;
   si es `false`, registra el proyecto aca con `register_project` apuntando a su
-  ruta local. Las queries (`query_context`, `find_usages`, `audit_project`) leen
-  de Chroma por `project_id`, asi que funcionan desde cualquier equipo sin re-registrar.
+  ruta local.
+- El **estado de indexado tambien es por dispositivo** (`indexed_files.device_id`,
+  `projects.device_indexed_at`): los vectores viven en un Chroma local, asi que
+  los hashes del delta indexing describen el indice de UNA maquina. `list_projects`
+  expone `indexed_here` y un `last_indexed` que es el de ESTE equipo
+  (`last_indexed_anywhere` para el global).
+- `find_usages` es la excepcion: lee `file_imports` de Postgres, no de Chroma, asi
+  que responde desde cualquier equipo.
 
 ---
 
@@ -265,9 +271,10 @@ PostgreSQL es **compartido en la nube** entre todas las maquinas que usen el ser
 
 Consecuencias importantes:
 
-- `list_projects` muestra **todos** los proyectos registrados desde cualquier maquina.
-- `query_context`, `audit_project` y `get_file` solo funcionan para proyectos indexados **en esa maquina**. Un proyecto que aparece en la lista pero devuelve contexto vacio normalmente fue indexado en otra maquina — no esta corrupto.
+- `list_projects` muestra **todos** los proyectos registrados desde cualquier maquina; `indexed_here` distingue los que esta maquina puede consultar.
+- `query_context`, `audit_project` y `get_file` solo funcionan para proyectos indexados **en esa maquina**. Un proyecto que aparece en la lista pero devuelve contexto vacio normalmente fue indexado en otra maquina — no esta corrupto. `query_context` lo dice explicitamente en un campo `warning` en vez de devolver un contexto vacio mudo.
 - Para usar un proyecto en una nueva maquina, hay que re-indexarlo localmente aunque ya aparezca en la lista: `index_project` (si el path en Postgres coincide con la ruta local) o `register_project` (si el path es distinto).
+- El delta indexing **no confia en el indexado de otro equipo**: los hashes se guardan por `device_id`, asi que el primer `index_project(incremental=true)` de cada maquina se comporta como un full y reconstruye su Chroma. Antes los hashes eran globales y el incremental respondia "sin cambios" mientras el indice local estaba vacio o viejo — el proyecto quedaba inconsultable ahi sin forma obvia de arreglarlo.
 - **No usar `delete_project` para limpiar proyectos de otra maquina**: borra la fila de PostgreSQL compartido y rompe el indice en todas las maquinas que lo usen. `delete_project` es irreversible y afecta a todos.
 
 ### Re-indexar por script (sin iniciar el servidor)

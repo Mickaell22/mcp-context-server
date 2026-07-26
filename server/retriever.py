@@ -115,6 +115,23 @@ def retrieve(
     return chunks
 
 
+def projects_without_chunks(project_ids: list[int]) -> list[int]:
+    """De los ids dados, cuales no tienen NINGUN chunk en el Chroma de este equipo.
+
+    El indice vectorial es local a cada maquina, pero el registro de proyectos
+    vive en una Postgres compartida: un proyecto indexado en otro equipo figura
+    como disponible y aca devuelve cero resultados. Sin este chequeo la falla es
+    muda (context vacio, sin error) y parece que el codigo no existe.
+    """
+    collection = _get_collection()
+    faltantes = []
+    for pid in project_ids:
+        got = collection.get(where={"project_id": {"$eq": pid}}, limit=1, include=[])
+        if not got["ids"]:
+            faltantes.append(pid)
+    return faltantes
+
+
 def get_file_chunks(project_id: int, file_path: str) -> list[dict]:
     """Retorna todos los chunks de un archivo especifico en orden."""
     collection = _get_collection()

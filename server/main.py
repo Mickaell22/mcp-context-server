@@ -201,7 +201,7 @@ async def main():
     logger.info("Iniciando MCP Context Server... (device_id=%s)", DEVICE_ID)
 
     # Migracion idempotente + adopcion de rutas locales de este dispositivo.
-    db.ensure_device_paths_schema()
+    db.ensure_schema()
     claimed = db.claim_local_paths(DEVICE_ID)
     if claimed:
         logger.info("Rutas locales adoptadas para %s: %d proyecto(s)", DEVICE_ID, claimed)

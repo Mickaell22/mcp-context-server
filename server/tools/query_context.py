@@ -4,7 +4,7 @@ import db
 import security
 import retriever
 import deepseek_client
-from config import TOP_K_RESULTS
+from config import TOP_K_RESULTS, DEVICE_ID
 from db import log_blocked_attempt, log_query
 
 
@@ -40,7 +40,19 @@ async def handle(args: dict, session_id: int | None) -> dict:
     chunks = retriever.retrieve(query, project_ids, top_k=top_k, code_only=code_only)
 
     if not chunks:
-        return {"context": "", "files_referenced": [], "locations": [], "tokens_used": 0}
+        # Distinguir "no hay match" de "este equipo no tiene el indice": el
+        # segundo caso se veia igual (context vacio) y hacia parecer que el
+        # codigo no existia, cuando faltaba indexar localmente.
+        sin_indice = retriever.projects_without_chunks(project_ids)
+        empty = {"context": "", "files_referenced": [], "locations": [], "tokens_used": 0}
+        if sin_indice:
+            faltan = [p["name"] for p in projects if p["id"] in sin_indice]
+            empty["warning"] = (
+                f"Sin indice local en este dispositivo ({DEVICE_ID}) para: {', '.join(faltan)}. "
+                f"El indice vectorial no se comparte entre equipos: corre "
+                f"index_project(project='{faltan[0]}') aca para poder consultarlo."
+            )
+        return empty
 
     context, input_tokens, output_tokens, cost = deepseek_client.compress_context(query, chunks)
 
