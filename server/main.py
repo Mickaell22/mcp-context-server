@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import sys
@@ -10,7 +11,8 @@ from mcp import types
 import db
 import security
 from config import LOG_LEVEL
-from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages, delete_project
+import self_update
+from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages, delete_project, check_updates, describe_project, check_server_version
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -140,6 +142,40 @@ async def list_tools() -> list[types.Tool]:
             },
         ),
         types.Tool(
+            name="check_server_version",
+            description="Version del PROPIO servidor MCP y actualizacion desde GitHub (distinto de check_updates, que mira los proyectos indexados). Sin argumentos informa que commit corre este equipo y que commits nuevos hay en el remoto. Con update=true hace git pull --ff-only del repo del server y, solo si el commit nuevo toco requirements.txt, reinstala las dependencias en su venv. Nunca se reinicia solo: despues hay que reiniciar Claude Code para cargar el codigo nuevo.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "update": {"type": "boolean", "description": "Si es true, actualiza el server (pull + deps si cambiaron). Si es false o se omite, solo informa."},
+                },
+            },
+        ),
+        types.Tool(
+            name="describe_project",
+            description="Reconocimiento de un proyecto ANTES de escribir codigo en el: que patrones sigue y como se conecta. Devuelve datos medidos del indice sin LLM (stack y dependencias, paleta de colores con sus tokens, modulos mas importados, estructura de carpetas, convencion de nombres) MAS una guia sintetizada (arquitectura, unidad tipica, flujo de datos, pasos para agregar una feature siguiendo el patron existente). El resultado se cachea hasta el proximo re-indexado.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre del proyecto a perfilar"},
+                    "refresh": {"type": "boolean", "description": "Si es true, regenera el perfil aunque haya uno cacheado vigente."},
+                    "focus": {"type": "string", "description": "Zona concreta en la que se va a trabajar (ej. 'autenticacion', 'carrito'). Sesga la guia hacia esa parte; los perfiles con focus no se cachean."},
+                },
+                "required": ["project"],
+            },
+        ),
+        types.Tool(
+            name="check_updates",
+            description="Revisa que proyectos de este equipo estan desactualizados: si el repo local esta detras de GitHub (behind/ahead/dirty, hace fetch) y si el indice de Chroma esta detras del codigo. Con sync=true los pone al dia: git pull (solo si el fast-forward es seguro: nunca con cambios sin commitear ni commits sin pushear) + re-indexado incremental.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre de un proyecto concreto (opcional). Si se omite, revisa todos los de este equipo."},
+                    "sync": {"type": "boolean", "description": "Si es true, ademas de reportar hace git pull (cuando es seguro) y re-indexa lo que quedo viejo."},
+                },
+            },
+        ),
+        types.Tool(
             name="find_usages",
             description="Busca que archivos importan o usan un simbolo, clase, funcion o modulo especifico. Requiere que el proyecto haya sido indexado con esta version del servidor.",
             inputSchema={
@@ -186,6 +222,17 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     elif name == "delete_project":
         result = await delete_project.handle(arguments, session_id)
 
+    elif name == "describe_project":
+        project_name = arguments.get("project", "")
+        session_id = _get_or_create_session(project_name)
+        result = await describe_project.handle(arguments, session_id)
+
+    elif name == "check_updates":
+        result = await check_updates.handle(arguments, session_id)
+
+    elif name == "check_server_version":
+        result = await check_server_version.handle(arguments, session_id)
+
     elif name == "find_usages":
         result = await find_usages.handle(arguments, session_id)
 
@@ -210,10 +257,26 @@ async def main():
     security.load_allowed_paths(paths)
     logger.info("Whitelist cargada: %d rutas", len(paths))
 
+    # Chequeo de version del propio server: avisa si otro equipo subio cambios.
+    # Ademas deja el cache caliente para el aviso pasivo de list_projects.
+    # Nunca bloquea el arranque: sin red simplemente no hay dato.
+    try:
+        estado = await asyncio.to_thread(self_update.check)
+        local = estado.get("local", {})
+        if estado.get("update_available"):
+            logger.warning(
+                "HAY VERSION NUEVA DEL SERVER: %d commit(s) por delante en GitHub. "
+                "Corre check_server_version(update=true) y reinicia Claude Code.",
+                estado.get("behind", 0),
+            )
+        else:
+            logger.info("Server en %s (%s)", local.get("commit", "?"), local.get("subject", ""))
+    except Exception as exc:
+        logger.info("No se pudo comprobar la version del server: %s", exc)
+
     async with stdio_server() as (read_stream, write_stream):
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
 if __name__ == "__main__":
-    import asyncio
     asyncio.run(main())
