@@ -45,6 +45,8 @@ def ensure_schema() -> None:
       codigo viejo (o nada) desde su Chroma.
     - projects.device_indexed_at: cuando indexo CADA equipo, para que
       list_projects no muestre como reciente el indexado de otra maquina.
+    - project_profiles: cache del perfil de describe_project. Es por dispositivo
+      porque se calcula sobre el Chroma local (mismo motivo que device_paths).
     """
     with cursor() as cur:
         cur.execute(
@@ -59,6 +61,18 @@ def ensure_schema() -> None:
         cur.execute(
             "CREATE INDEX IF NOT EXISTS idx_indexed_files_device "
             "ON indexed_files(project_id, device_id)"
+        )
+        cur.execute(
+            """
+            CREATE TABLE IF NOT EXISTS project_profiles (
+                project_id INTEGER NOT NULL REFERENCES projects(id),
+                device_id TEXT NOT NULL,
+                generated_for TEXT,
+                payload JSONB NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
+                PRIMARY KEY (project_id, device_id)
+            )
+            """
         )
 
 
@@ -169,6 +183,7 @@ def delete_project(project_id: int) -> None:
         cur.execute("DELETE FROM sessions WHERE project_id = %s", (project_id,))
         cur.execute("DELETE FROM indexed_files WHERE project_id = %s", (project_id,))
         cur.execute("DELETE FROM file_imports WHERE project_id = %s", (project_id,))
+        cur.execute("DELETE FROM project_profiles WHERE project_id = %s", (project_id,))
         cur.execute("DELETE FROM projects WHERE id = %s", (project_id,))
 
 
@@ -285,6 +300,64 @@ def update_file_imports(project_id: int, file_paths: list[str], imports: list[di
                 "INSERT INTO file_imports (project_id, file_path, import_name) VALUES %s",
                 [(project_id, i["file_path"], i["import_name"]) for i in imports],
             )
+
+
+def get_import_graph(project_id: int, limit: int = 20) -> dict:
+    """Como se conecta el codigo consigo mismo, sacado de file_imports.
+
+    - `most_imported`: modulos con mas fan-in (cuantos archivos distintos los
+      importan). Es el nucleo real del proyecto, medido, no adivinado.
+    - `most_importing`: archivos con mas imports salientes (los orquestadores).
+    Determinista y sin coste de LLM: la tabla ya se puebla al indexar.
+    """
+    with cursor() as cur:
+        cur.execute(
+            "SELECT import_name, COUNT(DISTINCT file_path) AS fan_in FROM file_imports "
+            "WHERE project_id = %s GROUP BY import_name ORDER BY fan_in DESC, import_name LIMIT %s",
+            (project_id, limit),
+        )
+        most_imported = [{"module": r["import_name"], "imported_by": r["fan_in"]} for r in cur.fetchall()]
+
+        cur.execute(
+            "SELECT file_path, COUNT(DISTINCT import_name) AS fan_out FROM file_imports "
+            "WHERE project_id = %s GROUP BY file_path ORDER BY fan_out DESC, file_path LIMIT %s",
+            (project_id, limit),
+        )
+        most_importing = [{"file": r["file_path"], "imports": r["fan_out"]} for r in cur.fetchall()]
+
+    return {"most_imported": most_imported, "most_importing": most_importing}
+
+
+# ---------- cache de perfiles (describe_project) ----------
+
+def get_profile(project_id: int, device_id: str = DEVICE_ID) -> dict | None:
+    with cursor() as cur:
+        cur.execute(
+            "SELECT generated_for, payload, created_at FROM project_profiles "
+            "WHERE project_id = %s AND device_id = %s",
+            (project_id, device_id),
+        )
+        row = cur.fetchone()
+        if not row:
+            return None
+        return {
+            "generated_for": row["generated_for"],
+            "payload": row["payload"],
+            "created_at": row["created_at"].isoformat() if row["created_at"] else None,
+        }
+
+
+def save_profile(project_id: int, payload: dict, generated_for: str | None, device_id: str = DEVICE_ID) -> None:
+    """Guarda el perfil junto al `device_indexed_at` con el que se genero: si
+    despues se reindexa, ese sello ya no coincide y el perfil se regenera."""
+    with cursor() as cur:
+        cur.execute(
+            "INSERT INTO project_profiles (project_id, device_id, generated_for, payload, created_at) "
+            "VALUES (%s, %s, %s, %s, NOW()) "
+            "ON CONFLICT (project_id, device_id) DO UPDATE SET "
+            "generated_for = EXCLUDED.generated_for, payload = EXCLUDED.payload, created_at = NOW()",
+            (project_id, device_id, generated_for, json.dumps(payload)),
+        )
 
 
 def find_files_importing(project_id: int, symbol: str) -> list[str]:

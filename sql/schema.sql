@@ -61,6 +61,19 @@ CREATE TABLE IF NOT EXISTS file_imports (
     import_name  TEXT NOT NULL
 );
 
+-- Cache del perfil de describe_project. Por dispositivo: se calcula sobre el
+-- Chroma local, que es de cada equipo (mismo motivo que projects.device_paths).
+-- generated_for guarda el device_indexed_at con el que se genero; si no coincide
+-- con el actual, el perfil esta vencido y se regenera.
+CREATE TABLE IF NOT EXISTS project_profiles (
+    project_id    INTEGER NOT NULL REFERENCES projects(id),
+    device_id     TEXT NOT NULL,
+    generated_for TEXT,
+    payload       JSONB NOT NULL,
+    created_at    TIMESTAMP NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (project_id, device_id)
+);
+
 CREATE TABLE IF NOT EXISTS blocked_attempts (
     id              SERIAL PRIMARY KEY,
     session_id      INTEGER REFERENCES sessions(id),
