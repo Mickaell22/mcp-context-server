@@ -10,7 +10,7 @@
 
 **Indexa tu codebase y busca por similitud semantica; DeepSeek Flash comprime lo relevante antes de que llegue al contexto.**
 <br/>
-**Menos tokens en Claude Code, mismo contexto util. 9 tools MCP, metricas de uso en PostgreSQL.**
+**Menos tokens en Claude Code, mismo contexto util. 12 tools MCP, metricas de uso en PostgreSQL.**
 
 <br/>
 
@@ -20,7 +20,7 @@
 
 <br/>
 
-[![9 Tools MCP](https://img.shields.io/badge/9-Tools_MCP-6C5CE7?style=for-the-badge)](#tools-mcp)
+[![12 Tools MCP](https://img.shields.io/badge/12-Tools_MCP-6C5CE7?style=for-the-badge)](#tools-mcp)
 [![Compresion de contexto](https://img.shields.io/badge/Contexto-Comprimido-00B894?style=for-the-badge)](#como-funciona)
 [![Auditoria de codigo](https://img.shields.io/badge/Auditoria-de_codigo-E17055?style=for-the-badge)](#tools-mcp)
 [![Local-first](https://img.shields.io/badge/Local--first-Tailscale-245EFF?style=for-the-badge)](#seguridad)
@@ -88,11 +88,14 @@ DeepSeek Flash API  ────────────────────
 |---|---|---|
 | `query_context` | `query`, `project` (str o list), `code_only` (bool), `top_k` (int, opcional) | Busqueda semantica con compresion DeepSeek. Soporta multi-proyecto. `top_k` por defecto 8; subelo en proyectos grandes. |
 | `index_project` | `project`, `incremental` (bool), `acknowledge_drift` (bool) | Re-indexa un proyecto existente por nombre. Antes de indexar verifica drift git (local detras del remoto o con cambios sin commitear); si lo detecta devuelve `needs_confirmation` y no indexa hasta reintentar con `acknowledge_drift=true`. Responde con `files_indexed`, `total_files` y `skipped_unchanged` (archivos escaneados cuyo hash no cambio), para distinguir "no habia nada que hacer" de "no vio el cambio". |
-| `list_projects` | — | Lista todos los proyectos registrados en la BD (desde cualquier maquina). `indexed_here` + `last_indexed` indican si ESTE equipo lo tiene indexado en su Chroma local; `last_indexed_anywhere` es el global. |
+| `list_projects` | — | Lista todos los proyectos registrados en la BD (desde cualquier maquina). `indexed_here` + `last_indexed` indican si ESTE equipo lo tiene indexado en su Chroma local; `last_indexed_anywhere` es el global. `index_stale` avisa (sin red, leyendo el repo en disco) si hay commits posteriores al ultimo indexado. |
 | `clone_project` | `repo_url` | Clona un repo de GitHub e indexa en un solo paso. |
 | `register_project` | `path`, `name` (opcional) | Registra un path local sin clonar e indexa. |
 | `get_file` | `project`, `file_path` | Retorna el contenido completo de un archivo del indice. |
 | `audit_project` | `project`, `categories` (opcional), `paired_with` (opcional), `raw` (opcional) | Auditoria automatica de codigo con hallazgos estructurados (severidad/archivo:linea/fix) + un `summary` consolidado y rankeado por severidad. `raw=true` devuelve los chunks crudos numerados sin compresion DeepSeek (coste 0, alta fidelidad). Autodetecta frontend vs backend. Categorias backend: **correctness**, security, code_quality, error_handling, deprecated, config_secrets, imports, io_operations, tests, **over-engineering**. Frontend: **correctness**, accessibility, performance, state_management, seo, component_design, error_handling, deprecated, tests, bundle_size, hydration, theming, **over-engineering**. `over-engineering` (comun a ambos) detecta complejidad innecesaria — abstraccion prematura, dependencias evitables, reinvencion de stdlib, boilerplate — respetando un guardarrail que nunca marca validacion de input externo, locks, seguridad ni tests. Con `paired_with=<repo hermano>` añade una auditoria de **contrato API** cross-repo (campos, nullability, tipos y endpoints que no calzan entre front y back). Fallback: si no encuentra patrones via busqueda semantica, analiza los chunks mas relevantes con DeepSeek. |
+| `describe_project` | `project`, `refresh` (bool), `focus` (str, opcional) | **Reconocimiento antes de escribir codigo**: como esta hecho el proyecto, para que lo nuevo salga igual a lo que ya hay. Devuelve `facts` (MEDIDO del indice, sin LLM: stack y dependencias de los manifiestos, paleta de colores con los tokens `--var` que los nombran, modulos con mas fan-in desde `file_imports`, carpetas y convencion de nombres) y `guide` (una pasada DeepSeek: arquitectura, unidad tipica, flujo de datos, convenciones y **los pasos para agregar una feature siguiendo el patron existente**). El perfil se cachea por dispositivo y se vence solo al re-indexar: la segunda llamada cuesta 0 tokens. `focus` sesga la guia a una zona concreta (esos perfiles no se cachean). |
+| `check_updates` | `project` (opcional), `sync` (bool) | Que proyectos de este equipo quedaron viejos, en los **dos ejes**: el repo respecto a GitHub (`behind`/`ahead`/`dirty`, hace fetch en paralelo) y el indice de Chroma respecto al codigo (`index_stale`). Con `sync=true` los pone al dia: `git pull --ff-only` + re-indexado incremental. El pull **solo** cuando el fast-forward es seguro — con cambios sin commitear o commits sin pushear no toca el repo y explica por que lo salto. El re-indexado si corre igual (es solo lectura). Trabaja sobre **la rama activa de cada repo**, no solo `main`: un proyecto parado en `feature/x` se compara contra `origin/feature/x`. Una rama local sin upstream se reporta como "no comparable" (no como "al dia") sugiriendo `git push -u origin <rama>`. |
+| `check_server_version` | `update` (bool) | Version del **propio servidor MCP** frente a GitHub (no confundir con `check_updates`, que mira los proyectos indexados). Sin argumentos dice que commit corre este equipo y lista los commits nuevos del remoto. Con `update=true` hace `git pull --ff-only` del repo del server y, solo si el commit nuevo toco `requirements.txt`, reinstala las dependencias en su venv. **Nunca se reinicia solo**: despues hay que reiniciar Claude Code, porque el proceso vivo sigue con el codigo que ya cargo en memoria. Si el repo tiene cambios sin commitear, aborta antes del pull. |
 | `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
 
 ---
@@ -148,9 +151,11 @@ Levanta el servidor:
 /home/mickaell/Escritorio/Proyectos MICKAELL/mcp-context-server/
 └── server/
     ├── main.py              # Entry point
-    ├── tools/                # Tools MCP
-    │   ├── audit_project.py  # Auditoria con fallback DeepSeek
-    │   ├── query_context.py  # Busqueda semantica
+    ├── tools/                    # Tools MCP
+    │   ├── audit_project.py      # Auditoria (llamadas a DeepSeek en paralelo)
+    │   ├── describe_project.py   # Reconocimiento: patrones, paleta, interacciones
+    │   ├── check_updates.py      # Frescura vs GitHub y vs el indice
+    │   ├── query_context.py      # Busqueda semantica
     │   ├── register_project.py
     │   ├── index_project.py
     │   └── ...
@@ -217,17 +222,33 @@ sudo systemctl start mcp-context
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
 | `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `1.2`). Con `all-MiniLM-L6-v2`, queries en lenguaje natural contra codigo suelen dar distancias de 0.6–1.1; valores menores a 1.0 filtran demasiado y devuelven contexto vacio. |
 | `DEEPSEEK_MODEL` | Modelo de DeepSeek (default: `deepseek-v4-flash`; el otro es `deepseek-v4-pro`). DeepSeek retira nombres viejos sin avisar y la API devuelve **400**: `deepseek-chat` ya no existe. Un 400 aqui NO rompe la tool — cae al fallback de chunks crudos con `total_tokens: 0` y `summary` vacio, que se parece a una auditoria limpia. Si un `audit_project` sale sospechosamente vacio, revisa `total_tokens` antes de creerle. |
-| `DEEPSEEK_TIMEOUT` | Timeout en segundos para llamadas a DeepSeek (default: `60.0`). El SDK Anthropic usa 10 min por defecto, demasiado para una tool MCP — bajarlo evita que `query_context`/`audit_project` se cuelguen. |
+| `DEEPSEEK_TIMEOUT` | Timeout en segundos para llamadas a DeepSeek (default: `120.0`). El SDK Anthropic usa 10 min por defecto, demasiado para una tool MCP. Ojo al bajarlo si subes `DEEPSEEK_MAX_TOKENS`: generar mas texto tarda mas, y un timeout corto lo corta a mitad y dispara reintentos. |
+| `DEEPSEEK_MAX_TOKENS` | Presupuesto de salida por llamada (default: `16384`). **En los modelos v4 el bloque `thinking` sale de aqui**: con los 4096 anteriores, un lote grande del audit se quedaba sin presupuesto razonando y devolvia una respuesta sin texto, que caia al fallback de chunks crudos — una categoria con 0 tokens y sin hallazgos, indistinguible de "todo limpio". |
 | `EMBEDDING_MODEL` | Modelo SentenceTransformers para embeddings (default: `all-MiniLM-L6-v2`). Para mejor recall sobre codigo: `jinaai/jina-embeddings-v2-base-code` o `nomic-ai/nomic-embed-text-v1.5`. Cambiarlo invalida el indice Chroma (cambia la dimension del vector) y exige reindex **full** de todos los proyectos. |
 | `AUDIT_TOP_K` | Nº de chunks que recupera cada categoria del audit (default: `18`). El audit prioriza recall sobre costo; `query_context` sigue usando `TOP_K_RESULTS=8`. |
-| `AUDIT_BATCH_MAX_CHARS` | Presupuesto de caracteres por llamada a DeepSeek en el audit (default: `120000` ≈ 30K tokens). `audit_project` parte los chunks de una categoria en lotes que no excedan este limite, para no superar la ventana de ~64K del modelo en repos grandes (categorias estructurales como `accessibility` cargan todos los componentes). |
+| `AUDIT_BATCH_MAX_CHARS` | Presupuesto de caracteres por llamada a DeepSeek en el audit (default: `45000` ≈ 11K tokens). `audit_project` parte los chunks en lotes que no excedan este limite y los audita **en paralelo**. Bajado desde 120K: con lotes de ~30K tokens el modelo razonaba tanto sobre el codigo que agotaba `DEEPSEEK_MAX_TOKENS` antes de escribir los hallazgos y se perdia el lote entero. Desde que los lotes van en paralelo, tenerlos mas chicos ya no cuesta tiempo. |
 | `AUDIT_MAX_CHUNKS` | Tope total de chunks por categoria del audit (default: `0` = sin tope, audita todo en lotes). Subilo a un entero para acotar costo en repos grandes a cambio de recall. |
 | `AUDIT_RAW_MAX_CHARS` | Presupuesto TOTAL de caracteres de la respuesta del audit en modo `raw` (default: `150000`; `0` = sin tope). Evita respuestas de 300K+ chars que saturan el contexto del que llama; las categorias recortadas avisan y sugieren pedirse solas con `categories=[...]`. |
 | `AUDIT_VERIFY_ENABLED` | Verificacion de hallazgos CRITICO/ALTO contra el archivo completo citado (default: `true`). Una llamada DeepSeek extra por audit; los descartados quedan en `summary.descartados` con su motivo. `false` la desactiva. |
+| `AUDIT_CONCURRENCY` | Llamadas a DeepSeek en paralelo dentro de un audit (default: `4`). El audit son N categorias x M lotes de I/O de red; en serie tardaba minutos en repos grandes. Subirlo mucho puede disparar rate limits (429); `1` vuelve al modo secuencial. |
+| `PROFILE_MAX_TOKENS` | Presupuesto de salida de `describe_project` (default: `12000`). Necesita mas que `DEEPSEEK_MAX_TOKENS` porque el perfil son 5 secciones de prosa **y** el modelo razona antes de escribir: con 4096 gastaba todo el presupuesto en el bloque `thinking` y devolvia una respuesta sin texto. |
 | `RERANK_ENABLED` | Activa el reranking híbrido semántico+léxico post-retrieval (default: `true`). `false` lo desactiva. |
 | `RERANK_CANDIDATE_MULT` / `RERANK_W_SEM` / `RERANK_W_LEX` | Tamaño del pool de candidatos (`top_k × mult`, default 3) y pesos del score (default 0.7 semántico / 0.3 léxico). |
 
 Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
+
+## Mantener el server al dia en varios equipos
+
+Cada equipo corre su propia copia del server desde su clon del repo. Cuando subis un cambio desde una maquina, las demas no se enteran solas — para eso esta `check_server_version`:
+
+- **El aviso llega solo**: al arrancar, y despues como mucho cada 6 horas, el server compara su commit con el remoto. Si hay version nueva, `list_projects` incluye un bloque `server_update` con cuantos commits faltan y de que son. Como `list_projects` es la primera llamada al entrar a un proyecto, el aviso aparece sin pedirlo.
+- **Para actualizar**: `check_server_version(update=true)` hace el `git pull --ff-only` y reinstala dependencias si el commit toco `requirements.txt`. Despues **reinicia Claude Code** — el proceso en marcha sigue ejecutando el codigo que ya tenia en memoria.
+- El repo del server se localiza por la ruta del propio `self_update.py`, no por la base de datos: funciona aunque el server no este registrado como proyecto indexado en ese equipo.
+- Si el repo tiene cambios sin commitear, no se hace pull (no se pisa trabajo en curso). Si el `pip install` falla, avisa de **no** reiniciar hasta resolverlo: arrancar con dependencias a medias te deja sin MCP justo cuando lo necesitas para diagnosticar.
+
+> Recorda que un cambio en `db.py` afecta a la Postgres **compartida**: conviene actualizar todos los equipos, porque uno con la version vieja puede pisar datos del nuevo.
+
+---
 
 ## Multi-dispositivo (misma Postgres, varios equipos)
 
@@ -256,12 +277,18 @@ como fallback.
 
 ## Costo estimado DeepSeek Flash
 
-| | Precio |
-|---|---|
-| Input | $0.14 / 1M tokens |
-| Output | $0.28 / 1M tokens |
-| Query promedio (~5k input, ~1k output) | ~$0.001 |
-| 1000 queries al mes | ~$1.00 |
+Desde el **2026-08-16** DeepSeek factura por franja horaria: off-peak cuesta la mitad que peak. Las horas peak son **01:00-04:00 y 06:00-10:00 UTC**, que en hora de Ecuador (UTC-5) caen en **20:00-23:00 y 01:00-05:00** — trabajando de dia siempre pagas off-peak. El calculo de costo elige la tarifa segun la hora UTC de cada llamada (`deepseek_client._rates()`), y las cuatro tarifas son env vars.
+
+| | Off-peak | Peak |
+|---|---|---|
+| Input (1M tokens) | $0.22 | $0.44 |
+| Output (1M tokens) | $0.66 | $1.32 |
+| Query promedio (~5k input, ~1k output) | ~$0.002 | ~$0.004 |
+| Auditoria completa de un repo | ~$0.01 | ~$0.02 |
+
+> Referencia de uso real: 152 llamadas en 26 dias (1.07M input + 161K output) costaban **$0.19** con las tarifas anteriores; con las nuevas serian **$0.34** off-peak o **$0.68** peak.
+>
+> El ratio input/output es de ~6.7:1, asi que lo que mas pesa es el **input**. La tarifa de *cache hit* ($0.007/1M, 30x mas barata que el cache miss) es la palanca grande pendiente: el audit repite el mismo bloque de instrucciones en cada lote.
 
 ---
 
@@ -306,6 +333,8 @@ cd server && ./.venv/bin/python eval/run_eval.py
 ```
 
 El *golden set* vive en `tests/fixtures/expected.json` (archivo, categoría, keywords, severidad por bug, más `must_not_flag` para los falsos positivos). Para medir recall hay que tener ground truth, y la única forma confiable es sembrar los bugs uno mismo: por eso las fixtures son sintéticas, no un repo real.
+
+Junto a la Capa 1 corren los tests de las demás piezas, todos offline: `test_audit_parallel.py` (los lotes se reparten en la pool y se re-agrupan en orden), `test_check_updates.py` (repos git temporales de verdad para `index_stale`, y el guardarrail que impide el `git pull` sobre un repo con cambios sin commitear), `test_describe_project.py` (extractores deterministas: paleta, manifiestos, estructura, naming) y `test_git_client.py`. `test_device_index.py` es la excepción: necesita una Postgres real y solo corre con `MCP_TEST_DATABASE_URL` exportada.
 
 ---
 
