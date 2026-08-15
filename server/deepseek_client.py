@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 
 import anthropic
 
@@ -14,13 +16,45 @@ from config import (
     DEEPSEEK_TIMEOUT,
     COMPRESS_FALLBACK_MAX_CHARS,
     AUDIT_BATCH_MAX_CHARS,
+    AUDIT_CONCURRENCY,
+    PROFILE_MAX_TOKENS,
+    DEEPSEEK_PRICE_IN_OFFPEAK,
+    DEEPSEEK_PRICE_OUT_OFFPEAK,
+    DEEPSEEK_PRICE_IN_PEAK,
+    DEEPSEEK_PRICE_OUT_PEAK,
+    DEEPSEEK_PEAK_HOURS_UTC,
 )
 
 logger = logging.getLogger(__name__)
 
-# $0.14 por 1M tokens input, $0.28 por 1M tokens output
-COST_INPUT_PER_TOKEN = 0.14 / 1_000_000
-COST_OUTPUT_PER_TOKEN = 0.28 / 1_000_000
+def _peak_ranges() -> list[tuple[int, int]]:
+    """Parsea DEEPSEEK_PEAK_HOURS_UTC ("1-4,6-10"). Un rango mal escrito se ignora
+    en vez de tumbar el server: equivocarse en una env var de precios no debe
+    impedir responder queries — a lo sumo el costo registrado sale como off-peak."""
+    ranges = []
+    for part in DEEPSEEK_PEAK_HOURS_UTC.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            ini, fin = (int(x) for x in part.split("-", 1))
+            ranges.append((ini, fin))
+        except ValueError:
+            logger.warning("Rango horario invalido en DEEPSEEK_PEAK_HOURS_UTC: %r (ignorado)", part)
+    return ranges
+
+
+def _is_peak(now: datetime | None = None) -> bool:
+    """True si la hora UTC cae en franja peak (el doble de precio)."""
+    hour = (now or datetime.now(timezone.utc)).hour
+    return any(ini <= hour < fin for ini, fin in _peak_ranges())
+
+
+def _rates() -> tuple[float, float]:
+    """(precio_input, precio_output) por TOKEN segun la franja horaria actual."""
+    if _is_peak():
+        return DEEPSEEK_PRICE_IN_PEAK / 1_000_000, DEEPSEEK_PRICE_OUT_PEAK / 1_000_000
+    return DEEPSEEK_PRICE_IN_OFFPEAK / 1_000_000, DEEPSEEK_PRICE_OUT_OFFPEAK / 1_000_000
 
 _client: anthropic.Anthropic | None = None
 
@@ -108,16 +142,21 @@ def _build_fragments(chunks: list[dict]) -> str:
     return "\n\n---\n\n".join(parts)
 
 
-def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:
+class _Unretryable(RuntimeError):
+    """Fallo determinista: reintentarlo solo gasta tiempo y da el mismo error."""
+
+
+def _call(prompt: str, chunks: list[dict], max_tokens: int | None = None) -> tuple[str, int, int, float]:
     """Llamada a DeepSeek con reintentos y fallback a chunks crudos. Compartida
-    por compress_context y audit_context."""
+    por compress_context, audit_context y profile_context."""
     client = _get_client()
+    budget = max_tokens or DEEPSEEK_MAX_TOKENS
     last_error: Exception | None = None
     for attempt in range(DEEPSEEK_MAX_RETRIES + 1):
         try:
             response = client.messages.create(
                 model=DEEPSEEK_MODEL,
-                max_tokens=DEEPSEEK_MAX_TOKENS,
+                max_tokens=budget,
                 messages=[{"role": "user", "content": prompt}],
             )
             # Los modelos v4 anteponen un bloque `thinking` al `text`, asi que
@@ -127,15 +166,27 @@ def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:
             # "DeepSeek no disponible".
             content = "".join(b.text for b in response.content if b.type == "text")
             if not content:
-                raise ValueError(
-                    f"Respuesta sin bloque de texto (bloques: "
-                    f"{[b.type for b in response.content]})"
-                )
+                blocks = [b.type for b in response.content]
+                # Caso real: con un prompt que pide una respuesta larga, el modelo
+                # gasta TODO max_tokens razonando y corta antes de emitir texto.
+                # Es determinista: reintentarlo tres veces solo tarda 2 minutos mas
+                # en dar el mismo resultado. Se sube el presupuesto, no se reintenta.
+                if getattr(response, "stop_reason", None) == "max_tokens":
+                    raise _Unretryable(
+                        f"el modelo agoto max_tokens={budget} razonando y no llego a "
+                        f"escribir la respuesta (bloques: {blocks}). Subi DEEPSEEK_MAX_TOKENS "
+                        f"o acorta lo que se le pide."
+                    )
+                raise ValueError(f"Respuesta sin bloque de texto (bloques: {blocks})")
             input_tokens = response.usage.input_tokens
             output_tokens = response.usage.output_tokens
-            cost = (input_tokens * COST_INPUT_PER_TOKEN) + (output_tokens * COST_OUTPUT_PER_TOKEN)
+            rate_in, rate_out = _rates()
+            cost = (input_tokens * rate_in) + (output_tokens * rate_out)
             logger.debug("DeepSeek: %d in / %d out tokens, $%.6f", input_tokens, output_tokens, cost)
             return content, input_tokens, output_tokens, cost
+        except _Unretryable as e:
+            last_error = e
+            break
         except Exception as e:
             last_error = e
             if attempt < DEEPSEEK_MAX_RETRIES:
@@ -146,8 +197,7 @@ def _call(prompt: str, chunks: list[dict]) -> tuple[str, int, int, float]:
                 )
                 time.sleep(backoff)
     logger.error(
-        "DeepSeek no disponible tras %d intentos (%s). Devolviendo chunks crudos.",
-        DEEPSEEK_MAX_RETRIES + 1, last_error,
+        "DeepSeek no disponible (%s). Devolviendo chunks crudos.", last_error,
     )
     return _raw_fallback(chunks), 0, 0, 0.0
 
@@ -173,36 +223,108 @@ def _batch_by_chars(chunks: list[dict], max_chars: int) -> list[list[dict]]:
     return batches
 
 
+def _audit_prompt(instructions: str, batch: list[dict]) -> str:
+    return (
+        f"{AUDIT_SYSTEM_INSTRUCTIONS}\n\n"
+        f"TAREA DE AUDITORÍA: {instructions}\n\n"
+        f"Fragmentos de código a auditar:\n\n{_build_fragments(batch)}"
+    )
+
+
+def audit_batches(
+    jobs: list[tuple[str, str, list[dict]]],
+    max_workers: int | None = None,  # None -> AUDIT_CONCURRENCY, leido al llamar
+) -> dict[str, tuple[str, int, int, float]]:
+    """Audita varios trabajos en paralelo. jobs = [(key, instructions, chunks)];
+    retorna {key: (findings, in_tok, out_tok, costo)}.
+
+    La unidad de paralelismo es el LOTE, no el trabajo: una sola categoría
+    estructural (accessibility carga todos los componentes) puede generar más
+    lotes que todas las demás juntas, así que repartir por categoría dejaría a
+    esa marcando el tiempo total. Se aplanan todos los lotes de todos los jobs en
+    una sola pool y después se re-agrupan por key respetando el orden original,
+    de modo que el resultado es idéntico al de la versión secuencial.
+    """
+    tasks: list[tuple[str, int, str, list[dict]]] = []  # (key, orden, prompt, batch)
+    empty: dict[str, tuple[str, int, int, float]] = {}
+    for key, instructions, chunks in jobs:
+        if not chunks:
+            empty[key] = ("Sin hallazgos.", 0, 0, 0.0)
+            continue
+        for order, batch in enumerate(_batch_by_chars(chunks, AUDIT_BATCH_MAX_CHARS)):
+            tasks.append((key, order, _audit_prompt(instructions, batch), batch))
+
+    if not tasks:
+        return empty
+
+    # El sleep del backoff de _call bloquea su propio worker, no al resto.
+    workers = max(1, min(max_workers or AUDIT_CONCURRENCY, len(tasks)))
+    with ThreadPoolExecutor(max_workers=workers) as pool:
+        results = list(pool.map(lambda t: _call(t[2], t[3]), tasks))
+
+    grouped: dict[str, list[tuple[int, str, int, int, float]]] = {}
+    for (key, order, _, _), (text, in_tok, out_tok, cost) in zip(tasks, results):
+        grouped.setdefault(key, []).append((order, text, in_tok, out_tok, cost))
+
+    out = dict(empty)
+    for key, parts in grouped.items():
+        parts.sort(key=lambda p: p[0])
+        findings = [p[1].strip() for p in parts if p[1] and p[1].strip() and p[1].strip() != "Sin hallazgos."]
+        total_in = sum(p[2] for p in parts)
+        total_out = sum(p[3] for p in parts)
+        total_cost = sum(p[4] for p in parts)
+        out[key] = ("\n".join(findings) if findings else "Sin hallazgos.", total_in, total_out, total_cost)
+    return out
+
+
 def audit_context(instructions: str, chunks: list[dict]) -> tuple[str, int, int, float]:
     """Variante de compress_context para auditorías: pide hallazgos estructurados
     con severidad, archivo:línea y fix. Retorna (findings, in_tok, out_tok, costo).
 
-    Parte los chunks en lotes que quepan en la ventana del modelo (ver _batch_by_chars)
-    y concatena los hallazgos. Una categoría con muchos archivos se audita en varias
-    pasadas en vez de fallar con error 400."""
+    Atajo de un solo trabajo sobre audit_batches (los lotes de este trabajo se
+    paralelizan igual). Para auditar varias categorías, llamar a audit_batches
+    directamente: reparte los lotes de TODAS ellas en la misma pool."""
+    return audit_batches([("_", instructions, chunks)])["_"]
+
+
+PROFILE_SYSTEM_INSTRUCTIONS = (
+    "Eres un dev senior al que acaban de dar acceso a un repo ajeno y tiene que "
+    "agregarle una feature SIN que se note que la escribio otra persona. Describe "
+    "las convenciones que ya existen; no propongas mejoras ni critiques el codigo.\n"
+    "Responde en español con EXACTAMENTE estas secciones y nada mas:\n"
+    "## Arquitectura — que capas hay y quien llama a quien.\n"
+    "## Unidad tipica — como se ve una unidad del proyecto (endpoint / componente / "
+    "servicio / modelo): en que archivo vive, como se nombra, que trae siempre.\n"
+    "## Flujo de datos — el camino de un dato desde que entra hasta que se guarda "
+    "o se pinta.\n"
+    "## Convenciones — nombres, imports, manejo de errores, estilos, lo que se "
+    "repita en el codigo que ves.\n"
+    "## Para agregar una feature — los pasos concretos y en orden que seguiria "
+    "alguien que copia el patron existente, citando los archivos que tocaria.\n"
+    "Se concreto y cita archivos reales. Los fragmentos son EXTRACTOS: si algo no "
+    "se ve, no lo inventes ni digas que 'falta'. Los datos duros (dependencias, "
+    "paleta, modulos mas importados) ya vienen medidos, no los recalcules: usalos "
+    "para explicar, y no los repitas como lista."
+)
+
+
+def profile_context(facts: str, chunks: list[dict]) -> tuple[str, int, int, float]:
+    """Sintesis de las convenciones de un proyecto para poder extenderlo.
+
+    `facts` son los datos ya medidos sin LLM (stack, paleta, grafo de imports):
+    van en el prompt como contexto para que la prosa explique en vez de adivinar.
+    """
     if not chunks:
-        return "Sin hallazgos.", 0, 0, 0.0
-
-    batches = _batch_by_chars(chunks, AUDIT_BATCH_MAX_CHARS)
-    findings: list[str] = []
-    total_in = total_out = 0
-    total_cost = 0.0
-    for batch in batches:
-        prompt = (
-            f"{AUDIT_SYSTEM_INSTRUCTIONS}\n\n"
-            f"TAREA DE AUDITORÍA: {instructions}\n\n"
-            f"Fragmentos de código a auditar:\n\n{_build_fragments(batch)}"
-        )
-        text, in_tok, out_tok, cost = _call(prompt, batch)
-        if text and text.strip() and text.strip() != "Sin hallazgos.":
-            findings.append(text.strip())
-        total_in += in_tok
-        total_out += out_tok
-        total_cost += cost
-
-    if not findings:
-        return "Sin hallazgos.", total_in, total_out, total_cost
-    return "\n".join(findings), total_in, total_out, total_cost
+        return "", 0, 0, 0.0
+    prompt = (
+        f"{PROFILE_SYSTEM_INSTRUCTIONS}\n\n"
+        f"DATOS MEDIDOS DEL PROYECTO (fiables, extraidos del indice):\n{facts}\n\n"
+        f"Fragmentos representativos del codigo:\n\n{_build_fragments(chunks)}"
+    )
+    # Presupuesto propio: son 5 secciones de prosa y el modelo razona antes de
+    # escribir. Con los 4096 de default gastaba todo el presupuesto pensando y
+    # devolvia una respuesta SIN bloque de texto.
+    return _call(prompt, chunks, max_tokens=PROFILE_MAX_TOKENS)
 
 
 def compress_context(query: str, chunks: list[dict]) -> tuple[str, int, int, float]:
