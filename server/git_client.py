@@ -150,6 +150,77 @@ def check_remote_status(repo_path: str) -> dict:
         return {"is_git": True, "error": _redact(str(e))}
 
 
+def local_state(repo_path: str) -> dict:
+    """Estado local BARATO: sin red, solo lee el repo en disco.
+
+    Retorna {is_git, dirty, last_commit (ISO), branch}. Sirve para saber si el
+    INDICE quedo viejo respecto al repo (distinto de si el REPO quedo viejo
+    respecto a GitHub, que necesita fetch y lo resuelve check_remote_status).
+    Igual que check_remote_status, si el path es un directorio padre mira los
+    repos hijos de primer nivel y agrega: dirty si alguno lo esta, y el commit
+    mas reciente de todos.
+    """
+    if not os.path.isdir(os.path.join(repo_path, ".git")):
+        try:
+            entries = sorted(os.scandir(repo_path), key=lambda e: e.name)
+        except OSError:
+            return {"is_git": False}
+        children = [
+            local_state(e.path)
+            for e in entries
+            if e.is_dir() and os.path.isdir(os.path.join(e.path, ".git"))
+        ]
+        commits = [c["last_commit"] for c in children if c.get("last_commit")]
+        if not children:
+            return {"is_git": False}
+        return {
+            "is_git": False,
+            "dirty": any(c.get("dirty") for c in children),
+            "last_commit": max(commits) if commits else None,
+        }
+    try:
+        repo = git.Repo(repo_path)
+        try:
+            last_commit = repo.head.commit.committed_datetime.isoformat()
+        except (ValueError, TypeError):  # repo sin commits
+            last_commit = None
+        try:
+            branch = repo.active_branch.name
+        except TypeError:  # HEAD detached
+            branch = None
+        return {
+            "is_git": True,
+            "dirty": repo.is_dirty(untracked_files=False),
+            "last_commit": last_commit,
+            "branch": branch,
+        }
+    except Exception as e:
+        return {"is_git": True, "error": _redact(str(e))}
+
+
+def pull_repo(repo_path: str) -> dict:
+    """git pull --ff-only contra la URL autenticada explicita (el token vive solo
+    en memoria, nunca se escribe en .git/config).
+
+    --ff-only a proposito: si el historial divergio, falla en vez de fabricar un
+    merge en el repo del usuario. Retorna {ok, output} o {ok: False, error}.
+    """
+    try:
+        repo = git.Repo(repo_path)
+        if not repo.remotes:
+            return {"ok": False, "error": "el repo no tiene remoto"}
+        origin = repo.remotes.origin
+        auth_url = _inject_token(_clean_persisted_url(origin))
+        try:
+            branch = repo.active_branch.name
+        except TypeError:
+            return {"ok": False, "error": "HEAD detached: no se puede hacer pull"}
+        output = repo.git.pull("--ff-only", auth_url, branch)
+        return {"ok": True, "output": _redact(output)}
+    except Exception as e:
+        return {"ok": False, "error": _redact(str(e))}
+
+
 def clone_repo(repo_url: str) -> tuple[str, str]:
     """
     Clona el repo en PROJECTS_BASE_PATH/<nombre>.
