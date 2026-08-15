@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import db
@@ -461,26 +462,8 @@ def _detect_project_type(project_id: int) -> str:
     return "frontend" if frontend > backend else "backend"
 
 
-def _structural_chunks(project_id: int, patterns: list[str], first_chunk_only: bool = False) -> list[dict]:
-    """Recupera chunks de archivos indexados que coincidan con los patrones ILIKE dados."""
-    file_paths = db.get_files_by_path_patterns(project_id, patterns)
-    chunks: list[dict] = []
-    for fp in file_paths:
-        file_chunks = retriever.get_file_chunks(project_id, fp)
-        if first_chunk_only:
-            file_chunks = file_chunks[:1]
-        for chunk in file_chunks:
-            chunks.append({
-                "file_path": fp,
-                "project_id": project_id,
-                "chunk_index": chunk["chunk_index"],
-                "start_line": chunk.get("start_line"),
-                "end_line": chunk.get("end_line"),
-                "symbols": chunk.get("symbols", ""),
-                "content": chunk["content"],
-                "distance": 0.0,
-            })
-    return chunks
+# La recuperación estructural vive en retriever (la comparte describe_project).
+_structural_chunks = retriever.chunks_by_path_patterns
 
 
 def _raw_fragments_within(chunks: list[dict], budget: float, category: str) -> tuple[str, int]:
@@ -553,14 +536,10 @@ def _gather_contract_chunks(project: dict, patterns: list[str], query: str, role
     return combined
 
 
-async def _contract_audit(
-    project_a: dict,
-    project_b: dict,
-    session_id: int | None,
-    raw: bool = False,
-    raw_budget: float = float("inf"),
-) -> dict:
-    """Audita el contrato API entre dos proyectos pareados (frontend + backend)."""
+def _contract_chunks(project_a: dict, project_b: dict) -> tuple[list[dict], list[str], str, str]:
+    """Retrieval del contrato API entre dos proyectos pareados (frontend + backend).
+    Solo recupera: la llamada al modelo la hace la pool de la fase B junto con las
+    categorías. Retorna (chunks, files, nombre_frontend, nombre_backend)."""
     type_a = _detect_project_type(project_a["id"])
     type_b = _detect_project_type(project_b["id"])
 
@@ -574,34 +553,8 @@ async def _contract_audit(
     back_chunks = _gather_contract_chunks(backend, _BACKEND_ROUTE_PATTERNS, _BACKEND_ROUTE_QUERY, "BACKEND")
 
     chunks = (front_chunks + back_chunks)[:_CONTRACT_MAX_CHUNKS]
-    if not chunks:
-        return {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
-
     files = list(dict.fromkeys(c["file_path"] for c in chunks))
-    if raw:
-        text, _ = _raw_fragments_within(chunks, raw_budget, "contracts")
-        return {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
-
-    context, in_tok, out_tok, cost = deepseek_client.audit_context(_CONTRACT_INSTRUCTIONS, chunks)
-
-    if session_id is not None:
-        db.log_query(
-            session_id=session_id,
-            query_text=f"[audit:contracts] {frontend['name']} <-> {backend['name']}",
-            response_text=context,
-            input_tokens=in_tok,
-            output_tokens=out_tok,
-            cost_usd=cost,
-        )
-
-    return {
-        "findings": context,
-        "files_referenced": files,
-        "tokens": in_tok + out_tok,
-        "_cost": cost,
-        "_in": in_tok,
-        "_out": out_tok,
-    }
+    return chunks, files, frontend["name"], backend["name"]
 
 
 async def handle(args: dict, session_id: int | None) -> dict:
@@ -652,6 +605,14 @@ async def handle(args: dict, session_id: int | None) -> dict:
     total_output = 0
     total_cost = 0.0
 
+    # ---------- Fase A: retrieval (secuencial) ----------
+    # Chroma + Postgres + embeddings se quedan en un solo hilo: son rápidos y así
+    # no hay que razonar sobre su thread-safety. Lo que se paraleliza (fase B) es
+    # únicamente el I/O de red contra DeepSeek, que es lo que tardaba minutos.
+    jobs: list[tuple[str, str, list[dict]]] = []
+    job_files: dict[str, list[str]] = {}
+    job_queries: dict[str, str] = {}
+
     for category, query in queries_to_run:
         try:
             strategy = CATEGORY_STRATEGY.get(category, {})
@@ -681,11 +642,9 @@ async def handle(args: dict, session_id: int | None) -> dict:
                         report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
                         continue
                     fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
-                    context, in_tok, out_tok, cost = deepseek_client.audit_context(fallback_instr, chunks)
-                    report[category] = {"findings": context, "files_referenced": files, "tokens": in_tok + out_tok}
-                    total_input += in_tok
-                    total_output += out_tok
-                    total_cost += cost
+                    jobs.append((category, fallback_instr, chunks))
+                    job_files[category] = files
+                    job_queries[category] = query
                     continue
                 report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
                 continue
@@ -719,44 +678,72 @@ async def handle(args: dict, session_id: int | None) -> dict:
             instructions = f"Categoría '{category}'. Busca problemas, ausencias o patrones relacionados con: {query}."
             if hint:
                 instructions += f"\nGuía específica: {hint}"
-            context, in_tok, out_tok, cost = deepseek_client.audit_context(instructions, chunks)
 
-            report[category] = {
-                "findings": context,
-                "files_referenced": files,
-                "tokens": in_tok + out_tok,
-            }
-            total_input += in_tok
-            total_output += out_tok
-            total_cost += cost
-
-            if session_id is not None:
-                db.log_query(
-                    session_id=session_id,
-                    query_text=f"[audit:{category}] {query}",
-                    response_text=context,
-                    input_tokens=in_tok,
-                    output_tokens=out_tok,
-                    cost_usd=cost,
-                )
+            jobs.append((category, instructions, chunks))
+            job_files[category] = files
+            job_queries[category] = query
 
         except Exception as exc:
             logger.error("Fallo en categoria %s: %s", category, exc, exc_info=True)
             report[category] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": []}
 
-    # Auditoría de contrato cross-repo (solo si se pasó paired_with)
+    # Contrato cross-repo: su retrieval también va en fase A para que sus lotes
+    # entren en la MISMA pool que las categorías, en vez de correr después.
+    contract_meta: dict | None = None
     if paired_project is not None:
         try:
-            contract = await _contract_audit(
-                project, paired_project, session_id, raw=raw, raw_budget=raw_budget_left
-            )
-            total_input += contract.pop("_in", 0)
-            total_output += contract.pop("_out", 0)
-            total_cost += contract.pop("_cost", 0.0)
-            report["contracts"] = contract
+            chunks, files, front_name, back_name = _contract_chunks(project, paired_project)
+            if not chunks:
+                report["contracts"] = {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
+            elif raw:
+                text, _ = _raw_fragments_within(chunks, raw_budget_left, "contracts")
+                report["contracts"] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
+            else:
+                jobs.append(("contracts", _CONTRACT_INSTRUCTIONS, chunks))
+                job_files["contracts"] = files
+                contract_meta = {"front": front_name, "back": back_name}
         except Exception as exc:
             logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
             report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
+
+    # ---------- Fase B: llamadas a DeepSeek (paralelas) ----------
+    # to_thread para no bloquear el event loop del server MCP mientras corre la pool.
+    results: dict[str, tuple[str, int, int, float]] = {}
+    if jobs:
+        try:
+            results = await asyncio.to_thread(deepseek_client.audit_batches, jobs)
+        except Exception as exc:
+            logger.error("Fallo en la pasada de auditoría: %s", exc, exc_info=True)
+            for key, _, _ in jobs:
+                report[key] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": job_files.get(key, [])}
+
+    # ---------- Fase C: ensamblado (secuencial) ----------
+    for key, _, _ in jobs:
+        if key not in results:
+            continue
+        context, in_tok, out_tok, cost = results[key]
+        report[key] = {
+            "findings": context,
+            "files_referenced": job_files.get(key, []),
+            "tokens": in_tok + out_tok,
+        }
+        total_input += in_tok
+        total_output += out_tok
+        total_cost += cost
+
+        if session_id is not None:
+            if key == "contracts" and contract_meta:
+                query_text = f"[audit:contracts] {contract_meta['front']} <-> {contract_meta['back']}"
+            else:
+                query_text = f"[audit:{key}] {job_queries.get(key, '')}"
+            db.log_query(
+                session_id=session_id,
+                query_text=query_text,
+                response_text=context,
+                input_tokens=in_tok,
+                output_tokens=out_tok,
+                cost_usd=cost,
+            )
 
     # Consolidación: ranking por severidad entre categorías (no aplica en modo raw)
     summary = None

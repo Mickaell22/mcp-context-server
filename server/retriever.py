@@ -132,6 +132,37 @@ def projects_without_chunks(project_ids: list[int]) -> list[int]:
     return faltantes
 
 
+def chunks_by_path_patterns(
+    project_id: int, patterns: list[str], first_chunk_only: bool = False
+) -> list[dict]:
+    """Recuperacion ESTRUCTURAL: todos los chunks de los archivos cuya ruta
+    coincide con alguno de los patrones ILIKE.
+
+    Complementa a retrieve(): la busqueda semantica no sirve para 'mirame todos
+    los componentes' ni para encontrar ausencias, porque el patron relevante esta
+    concentrado en archivos concretos y no disperso en el codigo.
+    """
+    import db  # local: db no participa del retrieval semantico
+
+    chunks: list[dict] = []
+    for fp in db.get_files_by_path_patterns(project_id, patterns):
+        file_chunks = get_file_chunks(project_id, fp)
+        if first_chunk_only:
+            file_chunks = file_chunks[:1]
+        for chunk in file_chunks:
+            chunks.append({
+                "file_path": fp,
+                "project_id": project_id,
+                "chunk_index": chunk["chunk_index"],
+                "start_line": chunk.get("start_line"),
+                "end_line": chunk.get("end_line"),
+                "symbols": chunk.get("symbols", ""),
+                "content": chunk["content"],
+                "distance": 0.0,
+            })
+    return chunks
+
+
 def get_file_chunks(project_id: int, file_path: str) -> list[dict]:
     """Retorna todos los chunks de un archivo especifico en orden."""
     collection = _get_collection()
