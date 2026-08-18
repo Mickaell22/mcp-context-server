@@ -26,6 +26,11 @@ app = Server("mcp-context-server")
 # session_id se crea por proyecto consultado; None si no hay proyecto activo
 _active_sessions: dict[str, int] = {}
 
+# Se setea cuando termina la inicializacion de DB (ensure_schema/claim_local_paths/
+# load_project_paths), que son round-trips reales a la Postgres remota de Railway.
+# call_tool espera este evento en vez de asumir que la whitelist ya esta cargada.
+_db_ready = asyncio.Event()
+
 
 def _get_or_create_session(project_name: str) -> int | None:
     if project_name not in _active_sessions:
@@ -192,6 +197,7 @@ async def list_tools() -> list[types.Tool]:
 
 @app.call_tool()
 async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
+    await _db_ready.wait()
     session_id = None
 
     if name == "query_context":
@@ -247,15 +253,27 @@ async def main():
 
     logger.info("Iniciando MCP Context Server... (device_id=%s)", DEVICE_ID)
 
-    # Migracion idempotente + adopcion de rutas locales de este dispositivo.
-    db.ensure_schema()
-    claimed = db.claim_local_paths(DEVICE_ID)
-    if claimed:
-        logger.info("Rutas locales adoptadas para %s: %d proyecto(s)", DEVICE_ID, claimed)
+    async def _startup_db_init() -> None:
+        # Corre en segundo plano, DESPUES del handshake MCP: ensure_schema,
+        # claim_local_paths y load_project_paths son round-trips reales a la
+        # Postgres remota de Railway, y si corren antes de stdio_server() el
+        # proceso no llega a leer stdin hasta que vuelven — eso es lo que hacia
+        # que Claude Code diera el servidor por caido si Railway tardaba de mas.
+        def _init_sync() -> list[str]:
+            db.ensure_schema()
+            claimed = db.claim_local_paths(DEVICE_ID)
+            if claimed:
+                logger.info("Rutas locales adoptadas para %s: %d proyecto(s)", DEVICE_ID, claimed)
+            return db.load_project_paths()
 
-    paths = db.load_project_paths()
-    security.load_allowed_paths(paths)
-    logger.info("Whitelist cargada: %d rutas", len(paths))
+        try:
+            paths = await asyncio.to_thread(_init_sync)
+            security.load_allowed_paths(paths)
+            logger.info("Whitelist cargada: %d rutas", len(paths))
+        finally:
+            # Se libera aunque falle: un tool call colgado esperando este
+            # evento para siempre es peor que uno que falla con el error real.
+            _db_ready.set()
 
     async def _check_self_update() -> None:
         # Corre en segundo plano, DESPUES del handshake MCP: un git fetch a
@@ -276,6 +294,7 @@ async def main():
             logger.info("No se pudo comprobar la version del server: %s", exc)
 
     async with stdio_server() as (read_stream, write_stream):
+        asyncio.create_task(_startup_db_init())
         asyncio.create_task(_check_self_update())
         await app.run(read_stream, write_stream, app.create_initialization_options())
 

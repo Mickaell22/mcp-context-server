@@ -6,9 +6,12 @@ import logging
 import os
 import re
 from pathlib import Path
-from sentence_transformers import SentenceTransformer
+from typing import TYPE_CHECKING
 import chromadb
 import git
+
+if TYPE_CHECKING:
+    from sentence_transformers import SentenceTransformer
 
 import db
 import security
@@ -30,6 +33,11 @@ _collection = None
 def _get_model() -> SentenceTransformer:
     global _model
     if _model is None:
+        # Import diferido: sentence_transformers arrastra torch/transformers/
+        # sklearn (~8s de import) que si estuviera a nivel de modulo bloquearia
+        # el handshake MCP con Claude Code antes de que el proceso llegue a
+        # leer stdin. Se paga una sola vez, en el primer uso real del modelo.
+        from sentence_transformers import SentenceTransformer
         logger.info("Cargando modelo de embeddings: %s", EMBEDDING_MODEL)
         _model = SentenceTransformer(EMBEDDING_MODEL)
     return _model
