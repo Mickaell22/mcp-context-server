@@ -257,24 +257,26 @@ async def main():
     security.load_allowed_paths(paths)
     logger.info("Whitelist cargada: %d rutas", len(paths))
 
-    # Chequeo de version del propio server: avisa si otro equipo subio cambios.
-    # Ademas deja el cache caliente para el aviso pasivo de list_projects.
-    # Nunca bloquea el arranque: sin red simplemente no hay dato.
-    try:
-        estado = await asyncio.to_thread(self_update.check)
-        local = estado.get("local", {})
-        if estado.get("update_available"):
-            logger.warning(
-                "HAY VERSION NUEVA DEL SERVER: %d commit(s) por delante en GitHub. "
-                "Corre check_server_version(update=true) y reinicia Claude Code.",
-                estado.get("behind", 0),
-            )
-        else:
-            logger.info("Server en %s (%s)", local.get("commit", "?"), local.get("subject", ""))
-    except Exception as exc:
-        logger.info("No se pudo comprobar la version del server: %s", exc)
+    async def _check_self_update() -> None:
+        # Corre en segundo plano, DESPUES del handshake MCP: un git fetch a
+        # GitHub no puede demorar la conexion con Claude Code, que tiene su
+        # propio timeout y da el servidor por caido si no responde a tiempo.
+        try:
+            estado = await asyncio.to_thread(self_update.check)
+            local = estado.get("local", {})
+            if estado.get("update_available"):
+                logger.warning(
+                    "HAY VERSION NUEVA DEL SERVER: %d commit(s) por delante en GitHub. "
+                    "Corre check_server_version(update=true) y reinicia Claude Code.",
+                    estado.get("behind", 0),
+                )
+            else:
+                logger.info("Server en %s (%s)", local.get("commit", "?"), local.get("subject", ""))
+        except Exception as exc:
+            logger.info("No se pudo comprobar la version del server: %s", exc)
 
     async with stdio_server() as (read_stream, write_stream):
+        asyncio.create_task(_check_self_update())
         await app.run(read_stream, write_stream, app.create_initialization_options())
 
 
