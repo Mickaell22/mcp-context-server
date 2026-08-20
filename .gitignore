@@ -1,6 +1,10 @@
 # MD del proyecto (documentacion interna)
 *.md
 !README.md
+# CLAUDE.md se versiona a proposito: es la memoria de decisiones del repo y se
+# edita desde varios equipos; sin trackearlo, cada maquina tiene su copia y los
+# gotchas escritos en una se pierden para las demas.
+!CLAUDE.md
 
 # Variables de entorno
 .env
