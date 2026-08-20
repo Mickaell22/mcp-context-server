@@ -17,7 +17,11 @@ import main
 def test_call_tool_espera_a_db_ready():
     async def _run():
         main._db_ready.clear()
-        task = asyncio.create_task(main.call_tool("list_projects", {}))
+        # Tool inexistente a proposito: call_tool responde
+        # {"error": "Tool desconocido"} sin tocar Postgres, asi el test mide
+        # solo el gate. Con un tool real, la parte de "ya se desbloqueo"
+        # dependeria de que falle una conexion de red (flaky por DNS).
+        task = asyncio.create_task(main.call_tool("__no_existe__", {}))
         try:
             done, _pending = await asyncio.wait({task}, timeout=0.2)
             assert task not in done, "call_tool no deberia avanzar sin _db_ready"

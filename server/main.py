@@ -270,6 +270,13 @@ async def main():
             paths = await asyncio.to_thread(_init_sync)
             security.load_allowed_paths(paths)
             logger.info("Whitelist cargada: %d rutas", len(paths))
+        except Exception:
+            # Sin este except la excepcion muere en la task y asyncio la vuelca
+            # como "Task exception was never retrieved" al cerrar el proceso:
+            # el fallo real (Postgres caida) llegaba tarde y sin contexto.
+            # No se reintenta: la whitelist queda vacia y cada tool falla con
+            # su propio error de DB, que es el diagnostico correcto.
+            logger.error("Fallo la inicializacion de DB; whitelist vacia", exc_info=True)
         finally:
             # Se libera aunque falle: un tool call colgado esperando este
             # evento para siempre es peor que uno que falla con el error real.
@@ -294,9 +301,18 @@ async def main():
             logger.info("No se pudo comprobar la version del server: %s", exc)
 
     async with stdio_server() as (read_stream, write_stream):
-        asyncio.create_task(_startup_db_init())
-        asyncio.create_task(_check_self_update())
-        await app.run(read_stream, write_stream, app.create_initialization_options())
+        # Las referencias se guardan a proposito: el loop solo mantiene una
+        # referencia debil a las tasks, y una task de fondo sin referencia
+        # fuerte puede ser recolectada a medias (asyncio.create_task docs).
+        background = [
+            asyncio.create_task(_startup_db_init()),
+            asyncio.create_task(_check_self_update()),
+        ]
+        try:
+            await app.run(read_stream, write_stream, app.create_initialization_options())
+        finally:
+            for task in background:
+                task.cancel()
 
 
 if __name__ == "__main__":
