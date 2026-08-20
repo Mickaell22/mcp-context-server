@@ -236,3 +236,19 @@ def test_check_remote_status_reporta_repos_hijos(tmp_path):
 def test_check_remote_status_sin_hijos(tmp_path):
     status = git_client.check_remote_status(str(tmp_path))
     assert status == {"is_git": False}
+
+
+# ---------- marcador del fallback (detecta LLM caido) ----------
+
+def test_raw_fallback_lleva_el_marcador_que_buscan_las_tools():
+    """audit_project y query_context deciden `llm_available: false` buscando
+    RAW_FALLBACK_MARKER en el texto. Si alguien reescribe el mensaje del
+    fallback sin tocar la constante, el aviso desaparece en silencio y un
+    audit degradado vuelve a parecer uno limpio."""
+    import deepseek_client
+
+    texto = deepseek_client._raw_fallback(
+        [{"file_path": "a.py", "chunk_index": 0, "content": "print(1)"}]
+    )
+    assert deepseek_client.RAW_FALLBACK_MARKER in texto
+    assert "print(1)" in texto

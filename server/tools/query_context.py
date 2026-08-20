@@ -85,9 +85,14 @@ async def handle(args: dict, session_id: int | None) -> dict:
             cost_usd=cost,
         )
 
-    return {
+    out = {
         "context": context,
         "files_referenced": files_referenced,
         "locations": locations,
         "tokens_used": input_tokens + output_tokens,
     }
+    if deepseek_client.RAW_FALLBACK_MARKER in context:
+        # Sin esto, "contexto crudo sin comprimir" pasa por una respuesta normal.
+        out["llm_available"] = False
+        out["warning"] = "DeepSeek no respondio: 'context' son los fragmentos crudos, sin sintetizar."
+    return out

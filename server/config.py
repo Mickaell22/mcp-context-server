@@ -26,7 +26,10 @@ DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
 # 4096 el modelo se quedaba sin presupuesto razonando sobre un lote grande del
 # audit y devolvia una respuesta sin texto, que caia al fallback de chunks crudos
 # (categoria con 0 tokens y sin hallazgos, indistinguible de "todo limpio").
-DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "16384"))
+# 16384 tampoco alcanzaba: la categoria `correctness` de ESTE repo agotaba el
+# presupuesto razonando y salia vacia (medido 2026-08-20). Con 32768 corre y
+# gasta ~31K tokens: el techo no se paga si no se usa, solo acota el thinking.
+DEEPSEEK_MAX_TOKENS = int(os.getenv("DEEPSEEK_MAX_TOKENS", "32768"))
 DEEPSEEK_MAX_RETRIES = int(os.getenv("DEEPSEEK_MAX_RETRIES", "2"))
 # Timeout por request. Ojo al subir max_tokens: generar mas texto tarda mas, y un
 # timeout corto lo corta a mitad y dispara reintentos que vuelven a tardar.

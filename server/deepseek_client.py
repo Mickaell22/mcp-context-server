@@ -70,6 +70,12 @@ def _get_client() -> anthropic.Anthropic:
     return _client
 
 
+# Prefijo del texto que devuelve el fallback. Los llamadores lo buscan para
+# saber que el LLM NO corrio: un audit degradado se ve casi igual a uno limpio
+# (0 tokens, sin hallazgos) y esa ambiguedad ya paso desapercibida semanas.
+RAW_FALLBACK_MARKER = "[DeepSeek no disponible"
+
+
 def _raw_fallback(chunks: list[dict]) -> str:
     """Concatena los chunks en crudo, truncados a un limite razonable.
 
@@ -82,10 +88,7 @@ def _raw_fallback(chunks: list[dict]) -> str:
     )
     if len(fragments) > COMPRESS_FALLBACK_MAX_CHARS:
         fragments = fragments[:COMPRESS_FALLBACK_MAX_CHARS] + "\n\n[...truncado...]"
-    return (
-        "[DeepSeek no disponible — se devuelven los fragmentos crudos sin comprimir]\n\n"
-        + fragments
-    )
+    return RAW_FALLBACK_MARKER + " — se devuelven los fragmentos crudos sin comprimir]\n\n" + fragments
 
 
 AUDIT_SYSTEM_INSTRUCTIONS = (

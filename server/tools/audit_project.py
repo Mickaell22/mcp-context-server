@@ -771,4 +771,18 @@ async def handle(args: dict, session_id: int | None) -> dict:
     }
     if summary is not None:
         result["summary"] = summary
+
+    # Un audit degradado (DeepSeek no respondio) devuelve chunks crudos con 0
+    # tokens y summary vacio: indistinguible de "todo limpio". Se marca explicito.
+    degradadas = sorted(
+        k for k, v in report.items()
+        if isinstance(v.get("findings"), str) and deepseek_client.RAW_FALLBACK_MARKER in v["findings"]
+    )
+    if degradadas:
+        result["llm_available"] = False
+        result["warning"] = (
+            f"DeepSeek no respondio en: {', '.join(degradadas)}. Esas categorias traen "
+            "los fragmentos crudos, NO hallazgos: la ausencia de findings no significa "
+            "que el codigo este limpio. Revisa el log del server y reintenta."
+        )
     return result
