@@ -53,6 +53,127 @@ def test_chunk_tsx_un_solo_boundary_retorna_none():
     assert indexer._chunk_tsx(lines) is None
 
 
+# ---------- _chunk_js ----------
+
+def test_chunk_js_separa_funciones_en_minuscula():
+    """A diferencia de _chunk_tsx, no exige mayuscula -- caso real: un app.js sin framework
+    con funciones sueltas top-level en minuscula (ej. Bitacora de Compras)."""
+    src = (
+        "let ultimoArchivo = null;\n"
+        "\n"
+        "function recalcularAhorro() {\n"
+        "  return 1;\n"
+        "}\n"
+        "\n"
+        "function cgImportar() {\n"
+        "  return 2;\n"
+        "}\n"
+    )
+    lines = src.splitlines(keepends=True)
+    segments = indexer._chunk_js(lines)
+
+    assert segments is not None
+    assert len(segments) == 3
+    assert "ultimoArchivo" in "".join(segments[0][1])
+    assert "recalcularAhorro" in "".join(segments[1][1])
+    assert "cgImportar" in "".join(segments[2][1])
+
+
+def test_chunk_js_incluye_const_flecha_top_level():
+    src = (
+        "const foo = (x) => {\n"
+        "  return x;\n"
+        "}\n"
+        "\n"
+        "async function bar() {\n"
+        "  return 1;\n"
+        "}\n"
+    )
+    lines = src.splitlines(keepends=True)
+    segments = indexer._chunk_js(lines)
+
+    assert segments is not None
+    assert len(segments) == 2
+    assert "const foo" in "".join(segments[0][1])
+    assert "async function bar" in "".join(segments[1][1])
+
+
+def test_chunk_js_const_simple_no_es_boundary():
+    """Una constante con valor literal (no funcion) no debe generar un boundary propio --
+    solo importa donde empiezan las funciones/clases."""
+    src = (
+        "const LOTE = 50;\n"
+        "let x = null;\n"
+        "\n"
+        "function unica() {\n"
+        "  return 1;\n"
+        "}\n"
+    )
+    lines = src.splitlines(keepends=True)
+    # una sola funcion real -> <2 boundaries -> None (fallback por lineas)
+    assert indexer._chunk_js(lines) is None
+
+
+def test_chunk_js_un_solo_boundary_retorna_none():
+    src = "function sola() {\n  return 1;\n}\n"
+    lines = src.splitlines(keepends=True)
+    assert indexer._chunk_js(lines) is None
+
+
+def test_chunk_js_nested_no_es_boundary():
+    """Una funcion/const anidada (indentada) no cuenta como boundary top-level."""
+    src = (
+        "function externa() {\n"
+        "  const interna = () => 1;\n"
+        "  return interna();\n"
+        "}\n"
+        "\n"
+        "function otra() {\n"
+        "  return 2;\n"
+        "}\n"
+    )
+    lines = src.splitlines(keepends=True)
+    segments = indexer._chunk_js(lines)
+
+    assert segments is not None
+    assert len(segments) == 2
+    # 'interna' quedo DENTRO del chunk de 'externa', no genero un tercer segmento
+    assert "interna" in "".join(segments[0][1])
+
+
+# ---------- _chunk_php ----------
+
+def test_chunk_php_separa_funciones():
+    src = (
+        "<?php\n"
+        "declare(strict_types=1);\n"
+        "\n"
+        "function db(): mysqli\n"
+        "{\n"
+        "    return null;\n"
+        "}\n"
+        "\n"
+        "function bitacora_guardar(array $d): int\n"
+        "{\n"
+        "    return 1;\n"
+        "}\n"
+    )
+    lines = src.splitlines(keepends=True)
+    segments = indexer._chunk_php(lines)
+
+    assert segments is not None
+    assert len(segments) == 3
+    assert "declare(strict_types" in "".join(segments[0][1])
+    assert "function db" in "".join(segments[1][1])
+    assert "function bitacora_guardar" in "".join(segments[2][1])
+
+
+def test_chunk_php_un_solo_boundary_retorna_none():
+    src = "<?php\nfunction sola() {\n    return 1;\n}\n"
+    lines = src.splitlines(keepends=True)
+    assert indexer._chunk_php(lines) is None
+
+
 # ---------- _chunk_css ----------
 
 def test_chunk_css_separa_bloques():
@@ -212,6 +333,40 @@ def test_chunk_content_archivo_corto_un_chunk():
     assert len(chunks) == 1
     assert "print('hola')" in chunks[0][0]
     assert chunks[0][1] == 1
+
+
+def test_chunk_content_despacha_js_por_extension():
+    src = (
+        "function primera() {\n"
+        "  return 1;\n"
+        "}\n"
+        "\n"
+        "function segunda() {\n"
+        "  return 2;\n"
+        "}\n"
+    )
+    chunks = indexer._chunk_content(src, "app.js")
+    assert len(chunks) == 2
+    assert "function primera" in chunks[0][0]
+    assert "function segunda" in chunks[1][0]
+
+
+def test_chunk_content_despacha_php_por_extension():
+    src = (
+        "<?php\n"
+        "function primera() {\n"
+        "    return 1;\n"
+        "}\n"
+        "\n"
+        "function segunda() {\n"
+        "    return 2;\n"
+        "}\n"
+    )
+    chunks = indexer._chunk_content(src, "datos.php")
+    # preludio ("<?php") + funcion primera + funcion segunda
+    assert len(chunks) == 3
+    assert "function primera" in chunks[1][0]
+    assert "function segunda" in chunks[2][0]
 
 
 def test_chunk_content_sin_rel_path_no_header():

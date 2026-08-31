@@ -84,6 +84,45 @@ def _chunk_tsx(lines: list[str]) -> list[tuple[int, list[str]]] | None:
     return _segments_from_boundaries(lines, boundaries)
 
 
+# A diferencia de _COMPONENT_BOUNDARY (pensado para componentes React: exige mayuscula en
+# 'function Nombre'), esto acepta cualquier nombre en minuscula -- un .js plano de un proyecto
+# sin framework (ej. un app.js monolitico de funciones sueltas, caso real: Bitacora de Compras)
+# no sigue la convencion de nombrado de componentes y antes caia entero al fallback generico de
+# ventanas fijas de CHUNK_SIZE lineas, diluyendo cada funcion junto con las vecinas no
+# relacionadas y degradando el retrieval semantico (ver mcp-context CLAUDE.md / postmortem).
+_JS_TOP_BOUNDARY = re.compile(
+    r'^(?:export\s+(?:default\s+)?)?(?:async\s+)?function\s+\w+\s*\('
+    r'|^(?:export\s+)?class\s+\w+'
+    r'|^(?:export\s+)?(?:const|let|var)\s+\w+\s*=\s*(?:async\s*)?(?:\(|function\b)'
+)
+
+# Mismo criterio para PHP procedural (funciones sueltas en archivos de src/lib/*.php, sin
+# clases ni namespaces la mayoria de las veces). No hay parser AST de PHP en la stdlib de
+# Python -- a diferencia de _chunk_python, esto confia en que las declaraciones top-level no
+# llevan indentacion, igual que _JS_TOP_BOUNDARY.
+_PHP_TOP_BOUNDARY = re.compile(
+    r'^function\s+\w+\s*\('
+    r'|^(?:abstract\s+|final\s+)?class\s+\w+'
+)
+
+
+def _chunk_js(lines: list[str]) -> list[tuple[int, list[str]]] | None:
+    """Divide JS/TS plano (sin JSX) en segmentos en límites de function/class/const-flecha
+    top-level."""
+    boundaries = [i for i, line in enumerate(lines) if _JS_TOP_BOUNDARY.match(line)]
+    if len(boundaries) < 2:
+        return None
+    return _segments_from_boundaries(lines, boundaries)
+
+
+def _chunk_php(lines: list[str]) -> list[tuple[int, list[str]]] | None:
+    """Divide PHP en segmentos por function/class top-level (sin indentación)."""
+    boundaries = [i for i, line in enumerate(lines) if _PHP_TOP_BOUNDARY.match(line)]
+    if len(boundaries) < 2:
+        return None
+    return _segments_from_boundaries(lines, boundaries)
+
+
 def _chunk_css(lines: list[str]) -> list[tuple[int, list[str]]] | None:
     """Divide CSS/SCSS en bloques de reglas top-level preservando :root y .dark completos."""
     segments: list[tuple[int, list[str]]] = []
@@ -158,6 +197,16 @@ def _chunk_content(content: str, rel_path: str = "") -> list[tuple[str, int, int
     ext = Path(rel_path).suffix.lower() if rel_path else ""
     if ext in {".tsx", ".jsx"}:
         segments = _chunk_tsx(lines)
+        if segments:
+            return _pack_segments(segments, header)
+
+    if ext in {".js", ".ts"}:
+        segments = _chunk_js(lines)
+        if segments:
+            return _pack_segments(segments, header)
+
+    if ext == ".php":
+        segments = _chunk_php(lines)
         if segments:
             return _pack_segments(segments, header)
 
