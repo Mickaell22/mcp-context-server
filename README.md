@@ -214,6 +214,7 @@ sudo systemctl start mcp-context
 | Variable | Descripcion |
 |---|---|
 | `DEEPSEEK_API_KEY` | API key de DeepSeek |
+| `DEEPSEEK_BASE_URL` / `DEEPSEEK_PROXY_KEY` | Opcionales, para redes que bloquean `api.deepseek.com`. Sin definir = conexion directa (default `https://api.deepseek.com/anthropic`). Con un proxy inverso (ej. un Cloudflare Worker): `DEEPSEEK_BASE_URL` apunta a el y `DEEPSEEK_PROXY_KEY` se envia como header `x-proxy-key`. |
 | `GITHUB_TOKEN` | Token de GitHub (scope: `repo`) para repos privados |
 | `DATABASE_URL` | PostgreSQL en Railway (URL publica para acceso externo) |
 | `DEVICE_ID` | Identificador de este equipo (ej. `desktop`, `laptop`). Como varios dispositivos comparten la misma Postgres, cada proyecto guarda una ruta local por dispositivo (`projects.device_paths`). Si se omite, se usa el hostname. Ver "Multi-dispositivo" abajo. |

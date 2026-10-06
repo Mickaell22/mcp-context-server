@@ -17,7 +17,10 @@ def _require(key: str) -> str:
 
 # DeepSeek
 DEEPSEEK_API_KEY = _require("DEEPSEEK_API_KEY")
-DEEPSEEK_BASE_URL = "https://api.deepseek.com/anthropic"
+DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com/anthropic")
+# Proxy opcional (redes que bloquean api.deepseek.com): si se define, se manda como
+# header x-proxy-key y DEEPSEEK_BASE_URL apunta al proxy. Vacio = conexion directa.
+DEEPSEEK_PROXY_KEY = os.getenv("DEEPSEEK_PROXY_KEY", "")
 # DeepSeek retira nombres de modelo sin avisar: "deepseek-chat" quedo invalido y
 # la API responde 400, lo que hacia caer todas las llamadas al fallback de chunks
 # crudos (coste 0, summary vacio) sin que se notara. Configurable por entorno.

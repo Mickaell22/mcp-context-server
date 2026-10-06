@@ -10,6 +10,7 @@ import anthropic
 from config import (
     DEEPSEEK_API_KEY,
     DEEPSEEK_BASE_URL,
+    DEEPSEEK_PROXY_KEY,
     DEEPSEEK_MODEL,
     DEEPSEEK_MAX_TOKENS,
     DEEPSEEK_MAX_RETRIES,
@@ -66,6 +67,10 @@ def _get_client() -> anthropic.Anthropic:
             api_key=DEEPSEEK_API_KEY,
             base_url=DEEPSEEK_BASE_URL,
             timeout=DEEPSEEK_TIMEOUT,
+            # Siempre explicito: el SDK mezcla ANTHROPIC_CUSTOM_HEADERS del entorno, y
+            # Claude Code lo hereda al MCP con la clave de SU proxy. Sin esto, en modo
+            # directo esa clave se mandaba a api.deepseek.com.
+            default_headers={"x-proxy-key": DEEPSEEK_PROXY_KEY or anthropic.Omit()},
         )
     return _client
 
