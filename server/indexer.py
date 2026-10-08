@@ -350,13 +350,25 @@ def _delete_file_chunks(collection, project_id: int, rel_path: str) -> None:
         logger.warning("No se pudo borrar chunks de %s: %s", rel_path, e)
 
 
+# Tramos del porcentaje: el escaneo de archivos es barato, los embeddings en CPU
+# son casi todo el tiempo. `progress(percent, mensaje)` es opcional y se llama
+# desde el hilo del indexado.
+_PCT_SCAN_MAX = 15.0
+_PCT_EMBED_END = 95.0
+_EMBED_BATCH = 128
+
+
 def index_project(
     project_id: int,
     project_path: str,
     incremental: bool = False,
+    progress=None,
 ) -> tuple[int, list[str]]:
+    progress = progress or (lambda percent, message: None)
+    progress(0.0, "Cargando modelo de embeddings")
     collection = _get_collection()
     model = _get_model()
+    progress(1.0, "Leyendo archivos")
 
     existing_hashes: dict[str, str] = db.get_file_hashes(project_id) if incremental else {}
 
@@ -371,6 +383,7 @@ def index_project(
     new_ids: list[str] = []
     new_metadatas: list[dict] = []
     skipped = 0
+    seen = 0
 
     ignored = _git_ignored_paths(project_path)
 
@@ -393,6 +406,13 @@ def index_project(
             if rel_path in ignored:
                 logger.debug("Ignorando %s: listado en .gitignore", full_path)
                 continue
+
+            seen += 1
+            if seen % 200 == 0:
+                # ponytail: no se conoce el total de archivos sin recorrer dos
+                # veces; la curva seen/(seen+1500) sube monotona y nunca pasa el
+                # tope del tramo. Es una estimacion, no un conteo exacto.
+                progress(1.0 + (_PCT_SCAN_MAX - 1.0) * seen / (seen + 1500), f"Leyendo archivos ({seen})")
 
             try:
                 file_hash = _file_hash(full_path)
@@ -450,17 +470,26 @@ def index_project(
 
     if new_chunks:
         logger.info("Generando embeddings para %d chunks...", len(new_chunks))
-        embeddings = model.encode(new_chunks, show_progress_bar=False).tolist()
-
-        batch = 500
-        for i in range(0, len(new_chunks), batch):
+        total = len(new_chunks)
+        # Por lotes (antes: un solo encode de todos los chunks, minutos sin una
+        # sola senal y toda la matriz de embeddings viva en RAM). Cada lote se
+        # codifica y se guarda enseguida, y de paso da un punto de progreso real.
+        for i in range(0, total, _EMBED_BATCH):
+            j = i + _EMBED_BATCH
+            embeddings = model.encode(new_chunks[i:j], show_progress_bar=False).tolist()
             collection.add(
-                ids=new_ids[i:i + batch],
-                documents=new_chunks[i:i + batch],
-                embeddings=embeddings[i:i + batch],
-                metadatas=new_metadatas[i:i + batch],
+                ids=new_ids[i:j],
+                documents=new_chunks[i:j],
+                embeddings=embeddings,
+                metadatas=new_metadatas[i:j],
+            )
+            done = min(j, total)
+            progress(
+                _PCT_SCAN_MAX + (_PCT_EMBED_END - _PCT_SCAN_MAX) * done / total,
+                f"Embeddings {done}/{total} chunks",
             )
 
+    progress(_PCT_EMBED_END, "Guardando indice en Postgres")
     db.log_indexed_files(project_id, all_files_for_db)
 
     if incremental:

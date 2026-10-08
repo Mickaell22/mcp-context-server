@@ -51,7 +51,7 @@ mcp-context-server/
 
 | Archivo | Responsabilidad |
 |---|---|
-| `main.py` | Entry point, inicializa el servidor MCP, registra 12 tools |
+| `main.py` | Entry point, inicializa el servidor MCP, registra 13 tools |
 | `config.py` | Variables de entorno y configuracion global |
 | `security.py` | Whitelist de rutas, blacklist de archivos sensibles |
 | `indexer.py` | Recorre el proyecto, genera embeddings, guarda en ChromaDB |
@@ -67,6 +67,8 @@ mcp-context-server/
 | `tools/get_file.py` | Tool MCP para obtener el contenido completo de un archivo |
 | `tools/audit_project.py` | Tool MCP para auditar un proyecto — 10 categorias backend, 13 frontend (incluyen `correctness` y `over-engineering`); `paired_with` añade auditoria de contrato cross-repo |
 | `tools/find_usages.py` | Tool MCP para buscar que archivos importan un simbolo especifico |
+| `progress.py` | Indexado en hilo (`run_index`, `asyncio.to_thread`) con progreso: notificacion MCP (si el cliente manda `progressToken`), log y `JOBS` para `index_status`. Sin esto el indexado sincrono congelaba el event loop y el cliente abortaba por inactividad (30 min) |
+| `tools/index_status.py` | Tool MCP de solo lectura: porcentaje, fase, tiempo y ETA aproximado de los indexados de este proceso |
 | `tools/describe_project.py` | Tool MCP de reconocimiento — `facts` medidos sin LLM (stack, paleta, grafo de imports, estructura, naming) + `guide` sintetizada; cachea en `project_profiles` |
 | `tools/check_updates.py` | Tool MCP de frescura — repo vs GitHub (fetch en paralelo) e indice vs repo; `sync=true` hace pull seguro + reindex |
 | `self_update.py` | Version del PROPIO server y actualizacion desde GitHub; resuelve su repo por `__file__`, cachea el chequeo y reinstala deps solo si cambio `requirements.txt` |
@@ -193,3 +195,17 @@ Opcionales con default (ver `.env.example`): `EMBEDDING_MODEL`, `AUDIT_TOP_K`, `
 - El servidor solo ejecuta git (via GitPython): `clone`/`pull` en `clone_project`, `fetch` en el chequeo de drift, `pull --ff-only` en `check_updates(sync=true)` y en la auto-actualizacion, y `ls-files` (solo lectura) para respetar `.gitignore` al indexar.
 - **Unica excepcion a "solo git"**: `self_update._install_deps()` ejecuta `pip install -r requirements.txt` con `sys.executable` (el interprete del propio venv). Ocurre SOLO bajo `check_server_version(update=true)` y SOLO si el commit descargado toco `requirements.txt`. Es deliberado: sin eso, una actualizacion que agrega una dependencia deja el server roto al siguiente arranque, y el usuario descubre el fallo cuando ya no tiene MCP para diagnosticarlo. Ningun otro comando del sistema.
 - No expuesto a internet — solo via Tailscale
+
+## Pendiente conocido: rutas con separador de Windows en el indice
+
+`indexer.index_project` guarda `file_path` con `os.path.relpath`, asi que en
+Windows quedan con `\` y en Linux con `/` (la Postgres es compartida). Los
+patrones de `describe_project`/`audit_project` (`%/components/%`, `%/services/%`)
+asumen `/`, por lo que en proyectos indexados desde Windows la estructura sale
+vacia, el naming dominante sale "otro", el tipo de proyecto se detecta mal y el
+muestreo de la guia se sesga. Verificado el 2026-10-08 con `Erp_FrontNew`
+(5161 de 5170 rutas con `\`). Tambien falla por esto
+`tests/test_audit_polish.py::test_gitignore_respetado_en_repos_hijos`.
+Arreglo previsto: normalizar a `/` al indexar (`indexer.py`, `_git_ignored_paths`)
+y reindexar completos los proyectos indexados desde Windows (un incremental
+dejaria chunks duplicados bajo la ruta vieja). Sin hacer.

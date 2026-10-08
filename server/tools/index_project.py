@@ -2,7 +2,7 @@ import os
 
 import db
 import security
-import indexer
+import progress
 import git_client
 from config import DEVICE_ID
 
@@ -69,7 +69,12 @@ async def handle(args: dict, session_id: int | None) -> dict:
             ),
         }
 
-    files_indexed, file_list = indexer.index_project(project["id"], path, incremental=incremental)
+    busy = progress.busy_error(project_name)
+    if busy:
+        return busy
+    files_indexed, file_list = await progress.run_index(
+        project_name, project["id"], path, incremental=incremental
+    )
 
     # `files_indexed: 0` por si solo es ambiguo ("nada cambio" vs "no vi lo que
     # cambio"): exponemos tambien cuantos archivos se escanearon y cuantos se

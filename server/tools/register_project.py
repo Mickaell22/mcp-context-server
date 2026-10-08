@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import db
 import security
-import indexer
+import progress
 from config import DEVICE_ID
 
 
@@ -40,7 +40,10 @@ async def handle(args: dict, session_id: int | None) -> dict:
     db.set_device_path(project_id, DEVICE_ID, path)
     security.add_allowed_path(path)
 
-    files_indexed, file_list = indexer.index_project(project_id, path)
+    busy = progress.busy_error(name)
+    if busy:
+        return busy
+    files_indexed, file_list = await progress.run_index(name, project_id, path)
 
     return {
         "project": name,

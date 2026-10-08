@@ -12,7 +12,7 @@ import db
 import security
 from config import LOG_LEVEL
 import self_update
-from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages, delete_project, check_updates, describe_project, check_server_version
+from tools import query_context, index_project, list_projects, clone_project, get_file, register_project, audit_project, find_usages, delete_project, check_updates, describe_project, check_server_version, index_status
 
 logging.basicConfig(
     level=getattr(logging, LOG_LEVEL, logging.INFO),
@@ -75,6 +75,16 @@ async def list_tools() -> list[types.Tool]:
                     "acknowledge_drift": {"type": "boolean", "description": "Si es true, indexa aunque el local este detras del remoto o tenga cambios sin commitear (segunda confirmacion tras un needs_confirmation)"},
                 },
                 "required": ["project"],
+            },
+        ),
+        types.Tool(
+            name="index_status",
+            description="Avance de los indexados en curso o recien terminados (register_project, index_project, clone_project): estado, porcentaje, fase, tiempo transcurrido y ETA aproximado. Responde al instante aunque haya un indexado corriendo. Solo ve los indexados de este proceso del server; se pierde al reiniciarlo.",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "project": {"type": "string", "description": "Nombre de un proyecto concreto (opcional). Si se omite, lista todos."},
+                },
             },
         ),
         types.Tool(
@@ -207,6 +217,9 @@ async def call_tool(name: str, arguments: dict) -> list[types.TextContent]:
 
     elif name == "index_project":
         result = await index_project.handle(arguments, session_id)
+
+    elif name == "index_status":
+        result = await index_status.handle(arguments, session_id)
 
     elif name == "list_projects":
         result = await list_projects.handle(arguments, session_id)
