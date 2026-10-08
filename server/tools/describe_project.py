@@ -25,6 +25,7 @@ from collections import Counter
 
 import db
 import deepseek_client
+import progress
 import retriever
 import security
 from config import DEVICE_ID
@@ -250,6 +251,20 @@ def _facts_for_prompt(facts: dict) -> str:
 
 
 async def handle(args: dict, session_id: int | None) -> dict:
+    name = (args.get("project") or "").strip()
+    tr = progress.track("describe", name) if name else None
+    try:
+        result = await _handle(args, session_id, tr)
+    except Exception as exc:
+        if tr:
+            tr.fail(str(exc))
+        raise
+    if tr:
+        tr.fail(result["error"]) if isinstance(result, dict) and "error" in result else tr.done()
+    return result
+
+
+async def _handle(args: dict, session_id: int | None, tr) -> dict:
     project_name = (args.get("project") or "").strip()
     if not project_name:
         return {"error": "Se requiere 'project'"}
@@ -289,6 +304,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
     # grande): en un hilo para no congelar el event loop del server.
     def _gather() -> tuple[dict, list[dict]]:
         # "%" = todos los archivos indexados; get_files_by_path_patterns filtra ILIKE.
+        tr.report(10, "Midiendo hechos del proyecto")
         file_paths = db.get_files_by_path_patterns(pid, ["%"])
         project_type = _detect_project_type(pid)
         palette_chunks = retriever.chunks_by_path_patterns(pid, _PALETTE_PATTERNS)
@@ -301,6 +317,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
             "imports": db.get_import_graph(pid),
             "palette": extract_palette(palette_chunks),
         }
+        tr.report(35, "Muestreando archivos representativos")
         return facts, _sample_chunks(pid, project_type, focus)
 
     facts, chunks = await asyncio.to_thread(_gather)
@@ -310,6 +327,7 @@ async def handle(args: dict, session_id: int | None) -> dict:
     if focus:
         instructions += f"\n- El desarrollador va a trabajar en: {focus}. Sesga la explicacion hacia esa zona."
 
+    tr.report(55, "Sintetizando la guia con el modelo")
     guide, in_tok, out_tok, cost = await asyncio.to_thread(
         deepseek_client.profile_context, instructions, chunks
     )

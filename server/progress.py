@@ -56,7 +56,9 @@ def snapshot(name: str | None = None) -> dict:
     """Copia del estado de los indexados, con tiempo transcurrido y ETA."""
     now = time.time()
     with _lock:
-        names = [name] if name else list(JOBS)
+        # El nombre de proyecto matchea tanto la clave del indexado ('Proj') como
+        # las de audit/describe ('audit:Proj').
+        names = [n for n in JOBS if not name or n == name or n.endswith(":" + name)]
         out = {}
         for n in names:
             job = JOBS.get(n)
@@ -65,7 +67,12 @@ def snapshot(name: str | None = None) -> dict:
             end = job.get("finished_at") or now
             elapsed = round(end - job["started_at"], 1)
             view = {k: job[k] for k in ("status", "percent", "message")}
+            view["kind"] = job.get("kind", "index")
             view["elapsed_s"] = elapsed
+            if job["status"] == "running":
+                # Segundos desde el ultimo avance reportado: si crece mucho, el
+                # proceso esta trabado (o en una fase larga sin hitos, ver message).
+                view["idle_s"] = round(now - job.get("updated_at", job["started_at"]), 1)
             # ponytail: ETA lineal sobre el porcentaje; la fase de embeddings
             # domina y es casi lineal, pero antes del 5 % no hay base para estimar.
             if job["status"] == "running" and job["percent"] >= 5:
@@ -101,8 +108,8 @@ async def run_index(name: str, project_id: int, path: str, incremental: bool = F
         ctx = None
 
     job = {
-        "status": "running", "percent": 0.0, "message": "Iniciando",
-        "started_at": time.time(), "finished_at": None,
+        "status": "running", "percent": 0.0, "message": "Iniciando", "kind": "index",
+        "started_at": time.time(), "updated_at": time.time(), "finished_at": None,
     }
     with _lock:
         JOBS[name] = job
@@ -113,6 +120,7 @@ async def run_index(name: str, project_id: int, path: str, incremental: bool = F
         with _lock:
             job["percent"] = round(percent, 1)
             job["message"] = message
+            job["updated_at"] = time.time()
         if percent < 100 and percent - last["pct"] < _MIN_STEP and now - last["t"] < _MIN_SECONDS:
             return
         last["pct"], last["t"] = percent, now
@@ -129,3 +137,38 @@ async def run_index(name: str, project_id: int, path: str, incremental: bool = F
     with _lock:
         job.update(status="done", finished_at=time.time())
     return result
+
+
+class Tracker:
+    """Progreso de un proceso largo que NO es un indexado (audit, describe).
+    Mismo `JOBS` e `index_status`; sin notificacion MCP (el handler no controla
+    el token). Seguro de llamar desde hilos."""
+
+    def __init__(self, kind: str, name: str):
+        self.key = f"{kind}:{name}"
+        self._job = {
+            "status": "running", "percent": 0.0, "message": "Iniciando", "kind": kind,
+            "started_at": time.time(), "updated_at": time.time(), "finished_at": None,
+        }
+        with _lock:
+            JOBS[self.key] = self._job
+
+    def report(self, percent: float, message: str) -> None:
+        with _lock:
+            # monotono: un hito atrasado no hace retroceder la barra
+            self._job["percent"] = round(max(self._job["percent"], min(percent, 99.0)), 1)
+            self._job["message"] = message
+            self._job["updated_at"] = time.time()
+        logger.info("%s: %.0f%% - %s", self.key, percent, message)
+
+    def done(self) -> None:
+        with _lock:
+            self._job.update(status="done", percent=100.0, message="Terminado", finished_at=time.time())
+
+    def fail(self, message: str) -> None:
+        with _lock:
+            self._job.update(status="error", message=message, finished_at=time.time())
+
+
+def track(kind: str, name: str) -> Tracker:
+    return Tracker(kind, name)

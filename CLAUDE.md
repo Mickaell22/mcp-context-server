@@ -68,7 +68,7 @@ mcp-context-server/
 | `tools/audit_project.py` | Tool MCP para auditar un proyecto — 10 categorias backend, 13 frontend (incluyen `correctness` y `over-engineering`); `paired_with` añade auditoria de contrato cross-repo |
 | `tools/find_usages.py` | Tool MCP para buscar que archivos importan un simbolo especifico |
 | `progress.py` | Indexado en hilo (`run_index`, `asyncio.to_thread`) con progreso: notificacion MCP (si el cliente manda `progressToken`), log y `JOBS` para `index_status`. Sin esto el indexado sincrono congelaba el event loop y el cliente abortaba por inactividad (30 min) |
-| `tools/index_status.py` | Tool MCP de solo lectura: porcentaje, fase, tiempo y ETA aproximado de los indexados de este proceso |
+| `tools/index_status.py` | Tool MCP de solo lectura: porcentaje, fase, tiempo, `idle_s` (segundos sin avance: si crece mucho, esta trabado) y ETA de indexados, `audit_project` y `describe_project` (clave `audit:<proyecto>` / `describe:<proyecto>`) |
 | `tools/describe_project.py` | Tool MCP de reconocimiento — `facts` medidos sin LLM (stack, paleta, grafo de imports, estructura, naming) + `guide` sintetizada; cachea en `project_profiles` |
 | `tools/check_updates.py` | Tool MCP de frescura — repo vs GitHub (fetch en paralelo) e indice vs repo; `sync=true` hace pull seguro + reindex |
 | `self_update.py` | Version del PROPIO server y actualizacion desde GitHub; resuelve su repo por `__file__`, cachea el chequeo y reinstala deps solo si cambio `requirements.txt` |
@@ -217,3 +217,13 @@ servicios y modelos.
 - `chunks_by_path_patterns` acepta `max_files`/`exclude` y recorta ANTES de consultar
   Chroma (una consulta por archivo: con miles de coincidencias bloqueaba el server).
 - La recoleccion de datos de `describe_project` corre en un hilo (`asyncio.to_thread`).
+
+## Procesos largos: nada sincrono en el event loop
+
+`audit_project` y `describe_project` hacian sus consultas a Chroma/Postgres y la
+verificacion de hallazgos de forma sincrona dentro del `async def`: el server no
+atendia ni `index_status`, y Claude Code abortaba la llamada a los 30 min de
+silencio (`CLAUDE_CODE_MCP_TOOL_IDLE_TIMEOUT`). Ahora el retrieval, la verificacion
+y el muestreo corren en hilos (`asyncio.to_thread`) y reportan por `progress.Tracker`.
+Regla: todo trabajo de mas de unos segundos va en un hilo y reporta progreso; si no,
+el resto de tools queda en cola detras de el. Verificado el 2026-10-08.

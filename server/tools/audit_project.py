@@ -7,6 +7,7 @@ import db
 import security
 import retriever
 import deepseek_client
+import progress
 from config import (
     AUDIT_TOP_K,
     AUDIT_MAX_CHUNKS,
@@ -585,6 +586,23 @@ def _contract_chunks(project_a: dict, project_b: dict) -> tuple[list[dict], list
 
 
 async def handle(args: dict, session_id: int | None) -> dict:
+    """Envuelve el trabajo real con seguimiento de progreso (index_status). Solo
+    se rastrea si hay un proyecto valido: un error de validacion no deja un job."""
+    name = args.get("project", "").strip()
+    tr = progress.track("audit", name) if name else None
+    try:
+        result = await _handle(args, session_id, tr)
+    except Exception as exc:
+        if tr:
+            tr.fail(str(exc))
+        raise
+    if tr:
+        tr.fail(result["error"]) if isinstance(result, dict) and "error" in result else tr.done()
+    return result
+
+
+async def _handle(args: dict, session_id: int | None, tr=None) -> dict:
+    tr = tr or progress.Tracker("audit", args.get("project", "").strip())
     project_name = args.get("project", "").strip()
     requested = args.get("categories", None)
 
@@ -640,110 +658,125 @@ async def handle(args: dict, session_id: int | None) -> dict:
     job_files: dict[str, list[str]] = {}
     job_queries: dict[str, str] = {}
 
-    for category, query in queries_to_run:
-        try:
-            strategy = CATEGORY_STRATEGY.get(category, {})
+    def _phase_a() -> None:
+        nonlocal raw_budget_left, contract_meta
+        for idx, (category, query) in enumerate(queries_to_run):
+            tr.report(2 + 38.0 * idx / max(1, len(queries_to_run)), f"Recuperando codigo: {category} ({idx + 1}/{len(queries_to_run)})")
+            try:
+                strategy = CATEGORY_STRATEGY.get(category, {})
 
-            chunks: list[dict] = []
+                chunks: list[dict] = []
 
-            if not strategy.get("semantic_disabled"):
-                chunks = retriever.retrieve(query, project["id"], top_k=AUDIT_TOP_K, code_only=True)
+                if not strategy.get("semantic_disabled"):
+                    chunks = retriever.retrieve(query, project["id"], top_k=AUDIT_TOP_K, code_only=True)
 
-            structural_pats = strategy.get("structural_patterns", [])
-            if structural_pats:
-                chunks = _dedup(chunks + _structural_chunks(project["id"], structural_pats))
+                structural_pats = strategy.get("structural_patterns", [])
+                if structural_pats:
+                    chunks = _dedup(chunks + _structural_chunks(project["id"], structural_pats))
 
-            import_pats = strategy.get("import_patterns", [])
-            if import_pats:
-                chunks = _dedup(chunks + _structural_chunks(project["id"], import_pats, first_chunk_only=True))
+                import_pats = strategy.get("import_patterns", [])
+                if import_pats:
+                    chunks = _dedup(chunks + _structural_chunks(project["id"], import_pats, first_chunk_only=True))
 
-            if not chunks:
-                # Fallback: get general overview of all files
-                all_chunks = retriever.retrieve("codigo, funciones, clases, estructura general del proyecto", project["id"])
-                if all_chunks:
-                    chunks = all_chunks[:5]  # Use top 5 most relevant
-                    files = list(dict.fromkeys(c["file_path"] for c in chunks))
-                    if raw:
-                        text, used = _raw_fragments_within(chunks, raw_budget_left, category)
-                        raw_budget_left -= used
-                        report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
+                if not chunks:
+                    # Fallback: get general overview of all files
+                    all_chunks = retriever.retrieve("codigo, funciones, clases, estructura general del proyecto", project["id"])
+                    if all_chunks:
+                        chunks = all_chunks[:5]  # Use top 5 most relevant
+                        files = list(dict.fromkeys(c["file_path"] for c in chunks))
+                        if raw:
+                            text, used = _raw_fragments_within(chunks, raw_budget_left, category)
+                            raw_budget_left -= used
+                            report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
+                            continue
+                        fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
+                        jobs.append((category, fallback_instr, chunks))
+                        job_files[category] = files
+                        job_queries[category] = query
                         continue
-                    fallback_instr = f"Categoría '{category}': revisa el código disponible y busca problemas relacionados con: {query}"
-                    jobs.append((category, fallback_instr, chunks))
-                    job_files[category] = files
-                    job_queries[category] = query
+                    report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
                     continue
-                report[category] = {"findings": "Sin patrones relevantes encontrados.", "files_referenced": []}
-                continue
 
-            # Tope opcional de chunks por categoría (AUDIT_MAX_CHUNKS=0 → sin tope).
-            # En producción acota costo; en pruebas se deja en 0 para recall máximo.
-            if AUDIT_MAX_CHUNKS and len(chunks) > AUDIT_MAX_CHUNKS:
-                logger.info("Categoria %s: %d chunks recortados a %d (AUDIT_MAX_CHUNKS)", category, len(chunks), AUDIT_MAX_CHUNKS)
-                chunks = chunks[:AUDIT_MAX_CHUNKS]
+                # Tope opcional de chunks por categoría (AUDIT_MAX_CHUNKS=0 → sin tope).
+                # En producción acota costo; en pruebas se deja en 0 para recall máximo.
+                if AUDIT_MAX_CHUNKS and len(chunks) > AUDIT_MAX_CHUNKS:
+                    logger.info("Categoria %s: %d chunks recortados a %d (AUDIT_MAX_CHUNKS)", category, len(chunks), AUDIT_MAX_CHUNKS)
+                    chunks = chunks[:AUDIT_MAX_CHUNKS]
 
-            files = list(dict.fromkeys(c["file_path"] for c in chunks))
+                files = list(dict.fromkeys(c["file_path"] for c in chunks))
 
-            if raw:
-                if raw_budget_left <= 0:
-                    report[category] = {
-                        "findings": (
-                            f"[Presupuesto raw agotado (AUDIT_RAW_MAX_CHARS). Para ver esta "
-                            f"categoría pídela sola: categories=['{category}'].]"
-                        ),
-                        "files_referenced": files,
-                        "tokens": 0,
-                        "raw": True,
-                    }
+                if raw:
+                    if raw_budget_left <= 0:
+                        report[category] = {
+                            "findings": (
+                                f"[Presupuesto raw agotado (AUDIT_RAW_MAX_CHARS). Para ver esta "
+                                f"categoría pídela sola: categories=['{category}'].]"
+                            ),
+                            "files_referenced": files,
+                            "tokens": 0,
+                            "raw": True,
+                        }
+                        continue
+                    text, used = _raw_fragments_within(chunks, raw_budget_left, category)
+                    raw_budget_left -= used
+                    report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
                     continue
-                text, used = _raw_fragments_within(chunks, raw_budget_left, category)
-                raw_budget_left -= used
-                report[category] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
-                continue
 
-            hint = strategy.get("prompt_hint", "")
-            instructions = f"Categoría '{category}'. Busca problemas, ausencias o patrones relacionados con: {query}."
-            if hint:
-                instructions += f"\nGuía específica: {hint}"
+                hint = strategy.get("prompt_hint", "")
+                instructions = f"Categoría '{category}'. Busca problemas, ausencias o patrones relacionados con: {query}."
+                if hint:
+                    instructions += f"\nGuía específica: {hint}"
 
-            jobs.append((category, instructions, chunks))
-            job_files[category] = files
-            job_queries[category] = query
+                jobs.append((category, instructions, chunks))
+                job_files[category] = files
+                job_queries[category] = query
 
-        except Exception as exc:
-            logger.error("Fallo en categoria %s: %s", category, exc, exc_info=True)
-            report[category] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": []}
+            except Exception as exc:
+                logger.error("Fallo en categoria %s: %s", category, exc, exc_info=True)
+                report[category] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": []}
 
-    # Contrato cross-repo: su retrieval también va en fase A para que sus lotes
-    # entren en la MISMA pool que las categorías, en vez de correr después.
+        # Contrato cross-repo: su retrieval también va en fase A para que sus lotes
+        # entren en la MISMA pool que las categorías, en vez de correr después.
+        if paired_project is not None:
+            try:
+                chunks, files, front_name, back_name = _contract_chunks(project, paired_project)
+                if not chunks:
+                    report["contracts"] = {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
+                elif raw:
+                    text, _ = _raw_fragments_within(chunks, raw_budget_left, "contracts")
+                    report["contracts"] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
+                else:
+                    jobs.append(("contracts", _CONTRACT_INSTRUCTIONS, chunks))
+                    job_files["contracts"] = files
+                    contract_meta = {"front": front_name, "back": back_name}
+            except Exception as exc:
+                logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
+                report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
+
+
     contract_meta: dict | None = None
-    if paired_project is not None:
-        try:
-            chunks, files, front_name, back_name = _contract_chunks(project, paired_project)
-            if not chunks:
-                report["contracts"] = {"findings": "Sin código de API/endpoints para comparar.", "files_referenced": [], "tokens": 0}
-            elif raw:
-                text, _ = _raw_fragments_within(chunks, raw_budget_left, "contracts")
-                report["contracts"] = {"findings": text, "files_referenced": files, "tokens": 0, "raw": True}
-            else:
-                jobs.append(("contracts", _CONTRACT_INSTRUCTIONS, chunks))
-                job_files["contracts"] = files
-                contract_meta = {"front": front_name, "back": back_name}
-        except Exception as exc:
-            logger.error("Fallo en auditoría de contratos: %s", exc, exc_info=True)
-            report["contracts"] = {"findings": f"Error durante la auditoría de contratos: {exc}", "files_referenced": []}
+    tr.report(2, "Recuperando codigo del proyecto")
+    # Retrieval sincrono (Chroma + Postgres, una consulta por archivo): en un hilo
+    # para no congelar el event loop del server mientras dura.
+    await asyncio.to_thread(_phase_a)
 
     # ---------- Fase B: llamadas a DeepSeek (paralelas) ----------
     # to_thread para no bloquear el event loop del server MCP mientras corre la pool.
     results: dict[str, tuple[str, int, int, float]] = {}
     if jobs:
+        tr.report(40, f"Analizando con el modelo ({len(jobs)} categorias)")
+
+        def _on_batch(done: int, total: int) -> None:
+            tr.report(40 + 50.0 * done / total, f"Analizando con el modelo: lote {done}/{total}")
+
         try:
-            results = await asyncio.to_thread(deepseek_client.audit_batches, jobs)
+            results = await asyncio.to_thread(deepseek_client.audit_batches, jobs, None, _on_batch)
         except Exception as exc:
             logger.error("Fallo en la pasada de auditoría: %s", exc, exc_info=True)
             for key, _, _ in jobs:
                 report[key] = {"findings": f"Error durante la auditoría: {exc}", "files_referenced": job_files.get(key, [])}
 
+    tr.report(91, "Ensamblando reporte")
     # ---------- Fase C: ensamblado (secuencial) ----------
     for key, _, _ in jobs:
         if key not in results:
@@ -778,7 +811,8 @@ async def handle(args: dict, session_id: int | None) -> dict:
         summary = _consolidate(report)
         if AUDIT_VERIFY_ENABLED:
             try:
-                v_in, v_out, v_cost = _verify_summary(project["id"], summary)
+                tr.report(92, "Verificando hallazgos criticos")
+                v_in, v_out, v_cost = await asyncio.to_thread(_verify_summary, project["id"], summary)
                 total_input += v_in
                 total_output += v_out
                 total_cost += v_cost

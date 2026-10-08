@@ -105,3 +105,43 @@ def test_rutas_se_guardan_siempre_con_slash(tmp_path):
     f = sub / "a.ts"
     f.write_text("x")
     assert indexer._rel(str(f), str(tmp_path)) == "src/app/a.ts"
+
+
+# ---------- audit/describe: seguimiento y estado "trabado" ----------
+
+def test_tracker_es_monotono_y_visible_por_nombre_de_proyecto():
+    progress.JOBS.clear()
+    tr = progress.track("audit", "Demo")
+    tr.report(40, "a")
+    tr.report(10, "atrasado")  # un hito atrasado no retrocede la barra
+    snap = progress.snapshot("Demo")["audit:Demo"]
+    assert snap["kind"] == "audit" and snap["percent"] == 40.0 and snap["status"] == "running"
+    assert "idle_s" in snap  # permite distinguir lento de trabado
+    tr.done()
+    snap = progress.snapshot("Demo")["audit:Demo"]
+    assert snap["status"] == "done" and snap["percent"] == 100.0 and "idle_s" not in snap
+
+
+def test_idle_s_crece_si_no_hay_avance(monkeypatch):
+    progress.JOBS.clear()
+    tr = progress.track("describe", "Demo")
+    tr._job["updated_at"] -= 90  # simula 90 s sin reportar nada
+    assert progress.snapshot("Demo")["describe:Demo"]["idle_s"] >= 90
+
+
+def test_tracker_fail_deja_el_mensaje():
+    progress.JOBS.clear()
+    tr = progress.track("audit", "X")
+    tr.fail("boom")
+    s = progress.snapshot("X")["audit:X"]
+    assert s["status"] == "error" and s["message"] == "boom"
+
+
+def test_audit_batches_reporta_cada_lote(monkeypatch):
+    import deepseek_client as dc
+    monkeypatch.setattr(dc, "_call", lambda prompt, batch: ("Sin hallazgos.", 1, 1, 0.0))
+    seen = []
+    jobs = [("a", "ins", [{"file_path": "f", "content": "x" * 10, "start_line": 1, "end_line": 1,
+                           "chunk_index": 0, "symbols": ""}])]
+    dc.audit_batches(jobs, None, lambda done, total: seen.append((done, total)))
+    assert seen and seen[-1][0] == seen[-1][1]

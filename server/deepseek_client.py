@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -242,6 +243,7 @@ def _audit_prompt(instructions: str, batch: list[dict]) -> str:
 def audit_batches(
     jobs: list[tuple[str, str, list[dict]]],
     max_workers: int | None = None,  # None -> AUDIT_CONCURRENCY, leido al llamar
+    on_progress=None,  # callable(hechos, total) tras cada llamada al modelo
 ) -> dict[str, tuple[str, int, int, float]]:
     """Audita varios trabajos en paralelo. jobs = [(key, instructions, chunks)];
     retorna {key: (findings, in_tok, out_tok, costo)}.
@@ -267,8 +269,24 @@ def audit_batches(
 
     # El sleep del backoff de _call bloquea su propio worker, no al resto.
     workers = max(1, min(max_workers or AUDIT_CONCURRENCY, len(tasks)))
+    done_count = 0
+    count_lock = threading.Lock()
+
+    def _run(t):
+        nonlocal done_count
+        r = _call(t[2], t[3])
+        if on_progress:
+            with count_lock:
+                done_count += 1
+                n = done_count
+            try:
+                on_progress(n, len(tasks))
+            except Exception:
+                pass  # el reporte de avance nunca debe romper la auditoria
+        return r
+
     with ThreadPoolExecutor(max_workers=workers) as pool:
-        results = list(pool.map(lambda t: _call(t[2], t[3]), tasks))
+        results = list(pool.map(_run, tasks))
 
     grouped: dict[str, list[tuple[int, str, int, int, float]]] = {}
     for (key, order, _, _), (text, in_tok, out_tok, cost) in zip(tasks, results):
