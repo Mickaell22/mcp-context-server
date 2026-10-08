@@ -142,7 +142,7 @@ def _stack(project_id: int) -> dict:
 
 # ---------- estructura y nombres ----------
 
-def _structure(file_paths: list[str], depth: int = 2, limit: int = 30) -> list[dict]:
+def _structure(file_paths: list[str], depth: int = 4, limit: int = 30) -> list[dict]:
     """Carpetas hasta `depth` niveles con su conteo de archivos."""
     counts: Counter[str] = Counter()
     for fp in file_paths:
@@ -162,7 +162,9 @@ def _naming(file_paths: list[str]) -> dict:
     archivo escrito por otra persona."""
     counts: Counter[str] = Counter()
     for fp in file_paths:
-        stem = os.path.splitext(os.path.basename(fp))[0]
+        # hasta el primer punto: 'nota.component.ts' es 'nota' (convencion
+        # Angular/Nest); splitext dejaba 'nota.component' y nada matcheaba.
+        stem = os.path.basename(fp).split(".")[0]
         if _PASCAL_RE.match(stem):
             counts["PascalCase"] += 1
         elif _KEBAB_RE.match(stem):
@@ -200,8 +202,13 @@ def _sample_chunks(project_id: int, project_type: str, focus: str) -> list[dict]
     chunks: list[dict] = []
     patterns = _FRONT_SAMPLE if project_type == "frontend" else _BACK_SAMPLE
     for pat in patterns:
-        found = retriever.chunks_by_path_patterns(project_id, [pat], first_chunk_only=True)
-        chunks.extend(_without_tests(found)[:2])
+        # max_files=2: solo se quieren 2 archivos por patron; sin el tope se
+        # hacia una consulta a Chroma por CADA archivo que coincidia (miles en
+        # un front grande), bloqueando el server minutos.
+        found = retriever.chunks_by_path_patterns(
+            project_id, [pat], first_chunk_only=True, max_files=2, exclude=_SAMPLE_EXCLUDE
+        )
+        chunks.extend(found)
 
     if focus:
         chunks.extend(_without_tests(retriever.retrieve(focus, project_id, top_k=8, code_only=True)))
@@ -277,24 +284,28 @@ async def handle(args: dict, session_id: int | None) -> dict:
                      f"Corre index_project aca antes de pedir el perfil."
         }
 
-    # ---- datos duros (sin LLM) ----
-    # "%" = todos los archivos indexados; get_files_by_path_patterns filtra ILIKE.
-    file_paths = db.get_files_by_path_patterns(pid, ["%"])
-    project_type = _detect_project_type(pid)
-    palette_chunks = retriever.chunks_by_path_patterns(pid, _PALETTE_PATTERNS)
+    # ---- datos duros (sin LLM) + muestreo ----
+    # Todo esto es sincrono (Postgres + Chroma, cientos de consultas en un front
+    # grande): en un hilo para no congelar el event loop del server.
+    def _gather() -> tuple[dict, list[dict]]:
+        # "%" = todos los archivos indexados; get_files_by_path_patterns filtra ILIKE.
+        file_paths = db.get_files_by_path_patterns(pid, ["%"])
+        project_type = _detect_project_type(pid)
+        palette_chunks = retriever.chunks_by_path_patterns(pid, _PALETTE_PATTERNS)
+        facts = {
+            "project_type": project_type,
+            "files_indexed": len(file_paths),
+            "stack": _stack(pid),
+            "structure": _structure(file_paths),
+            "naming": _naming(file_paths),
+            "imports": db.get_import_graph(pid),
+            "palette": extract_palette(palette_chunks),
+        }
+        return facts, _sample_chunks(pid, project_type, focus)
 
-    facts = {
-        "project_type": project_type,
-        "files_indexed": len(file_paths),
-        "stack": _stack(pid),
-        "structure": _structure(file_paths),
-        "naming": _naming(file_paths),
-        "imports": db.get_import_graph(pid),
-        "palette": extract_palette(palette_chunks),
-    }
+    facts, chunks = await asyncio.to_thread(_gather)
 
     # ---- sintesis (una pasada DeepSeek) ----
-    chunks = _sample_chunks(pid, project_type, focus)
     instructions = _facts_for_prompt(facts)
     if focus:
         instructions += f"\n- El desarrollador va a trabajar en: {focus}. Sesga la explicacion hacia esa zona."

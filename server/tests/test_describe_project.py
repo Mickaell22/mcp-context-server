@@ -125,3 +125,59 @@ def test_naming_detecta_la_convencion_dominante():
 
     files = ["src/user-card.ts", "src/order-list.ts", "src/Main.ts"]
     assert dp._naming(files)["dominant"] == "kebab-case"
+
+
+# ---------- frontends Angular (regresion Erp_FrontNew) ----------
+
+def test_naming_convencion_angular_con_varios_puntos():
+    files = ["a/nota-utiles.component.ts", "a/base.service.ts", "a/x.interface.ts", "a/y-z.enum.ts"]
+    r = dp._naming(files)
+    assert r["dominant"] == "kebab-case" and r["counts"].get("otro", 0) == 0
+
+
+def test_estructura_baja_hasta_el_area_de_negocio():
+    files = [f"src/app/features/comercial/Asistencia/x{i}.ts" for i in range(3)] + [
+        "src/app/features/eygh/y.ts"]
+    dirs = {d["dir"]: d["files"] for d in dp._structure(files)}
+    assert dirs["src/app/features/comercial"] == 3 and dirs["src/app/features/eygh"] == 1
+
+
+def test_manifiesto_angular_se_reconoce_como_frontend():
+    from tools import audit_project as ap
+    pkg = '{"dependencies": {"@angular/core": "^19.1.0", "rxjs": "~7.8.0"}}'
+    assert ap._FRONT_DEPS_RE.search(pkg)
+    assert not ap._FRONT_DEPS_RE.search('{"dependencies": {"express": "4", "pg": "8"}}')
+    assert ap._FRONT_DEPS_RE.search("dependencies:\n  flutter:\n    sdk: flutter\n")
+
+
+def test_detect_project_type_front_angular_sin_tsx(monkeypatch):
+    from tools import audit_project as ap
+    monkeypatch.setattr(ap.db, "get_file_extensions", lambda pid: {".ts": 2000, ".html": 1500, ".css": 1000, ".json": 20})
+    monkeypatch.setattr(ap.retriever, "chunks_by_path_patterns", lambda *a, **k: [
+        {"file_path": "package.json", "content": '"@angular/core": "^19"'}])
+    assert ap._detect_project_type(1) == "frontend"
+    # un backend Node (sin framework de UI) sigue siendo backend
+    monkeypatch.setattr(ap.retriever, "chunks_by_path_patterns", lambda *a, **k: [
+        {"file_path": "package.json", "content": '"express": "4"'}])
+    assert ap._detect_project_type(1) == "backend"
+    # mucho backend .cs con un front dentro: no se reclasifica
+    monkeypatch.setattr(ap.db, "get_file_extensions", lambda pid: {".cs": 900, ".ts": 100})
+    monkeypatch.setattr(ap.retriever, "chunks_by_path_patterns", lambda *a, **k: [
+        {"file_path": "web/package.json", "content": '"@angular/core": "^19"'}])
+    assert ap._detect_project_type(1) == "backend"
+
+
+def test_muestreo_no_consulta_chroma_por_cada_archivo(monkeypatch):
+    # regresion: '%/components/%' coincide con miles de archivos en un front y se
+    # hacia una consulta a Chroma por cada uno antes de quedarse con 2
+    import retriever
+    fetched = []
+    files = [f"src/app/features/a{i}/components/c{i}.component.ts" for i in range(3000)]
+    files += ["src/app/x/components/c.spec.ts", "src/app/e2e/components/z.ts"]
+    monkeypatch.setattr("db.get_files_by_path_patterns", lambda pid, pats: sorted(files))
+    monkeypatch.setattr(retriever, "get_file_chunks",
+                        lambda pid, fp: fetched.append(fp) or [{"chunk_index": 0, "content": "x"}])
+    out = retriever.chunks_by_path_patterns(
+        1, ["%/components/%"], first_chunk_only=True, max_files=2, exclude=dp._SAMPLE_EXCLUDE)
+    assert len(fetched) == 2 and len(out) == 2
+    assert not any("e2e" in f for f in fetched)

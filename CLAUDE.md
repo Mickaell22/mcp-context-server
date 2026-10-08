@@ -203,3 +203,17 @@ Windows y los patrones `%/components/%` de describe/audit no matcheaban). Los
 proyectos indexados ANTES de este fix siguen con `\` en Postgres/Chroma: hay que
 reindexarlos completos (`index_project` sin `incremental`); un incremental dejaria
 chunks duplicados bajo la ruta vieja.
+
+## Perfil de describe_project en frontends (resuelto 2026-10-08)
+
+Verificado con `Erp_FrontNew` (5170 archivos): tipo `frontend`, naming `kebab-case`
+(4923 de 5170), estructura por areas de `features` y muestreo con componentes,
+servicios y modelos.
+
+- `_detect_project_type` decide por el manifiesto (`package.json`/`pubspec.yaml` con
+  framework de UI) si no hay mucho backend; antes solo contaba `.tsx/.jsx`.
+- `_naming` toma el stem hasta el primer punto (`x.component.ts` -> `x`).
+- `_structure` baja a 4 niveles.
+- `chunks_by_path_patterns` acepta `max_files`/`exclude` y recorta ANTES de consultar
+  Chroma (una consulta por archivo: con miles de coincidencias bloqueaba el server).
+- La recoleccion de datos de `describe_project` corre en un hilo (`asyncio.to_thread`).

@@ -132,8 +132,21 @@ def projects_without_chunks(project_ids: list[int]) -> list[int]:
     return faltantes
 
 
+def _spread(items: list[str], n: int) -> list[str]:
+    """`n` elementos repartidos a lo largo de la lista (no los n primeros, que en
+    una lista ordenada por ruta serian todos de la misma carpeta)."""
+    if len(items) <= n:
+        return items
+    step = len(items) / n
+    return [items[int(i * step)] for i in range(n)]
+
+
 def chunks_by_path_patterns(
-    project_id: int, patterns: list[str], first_chunk_only: bool = False
+    project_id: int,
+    patterns: list[str],
+    first_chunk_only: bool = False,
+    max_files: int | None = None,
+    exclude: tuple[str, ...] = (),
 ) -> list[dict]:
     """Recuperacion ESTRUCTURAL: todos los chunks de los archivos cuya ruta
     coincide con alguno de los patrones ILIKE.
@@ -145,7 +158,14 @@ def chunks_by_path_patterns(
     import db  # local: db no participa del retrieval semantico
 
     chunks: list[dict] = []
-    for fp in db.get_files_by_path_patterns(project_id, patterns):
+    files = db.get_files_by_path_patterns(project_id, patterns)
+    # Recortar ANTES de pedir los chunks: cada archivo es una consulta a Chroma,
+    # y un patron como '%/components/%' puede coincidir con miles de archivos.
+    if exclude:
+        files = [f for f in files if not any(x in f"/{f}" for x in exclude)]
+    if max_files is not None:
+        files = _spread(files, max_files)
+    for fp in files:
         file_chunks = get_file_chunks(project_id, fp)
         if first_chunk_only:
             file_chunks = file_chunks[:1]

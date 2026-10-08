@@ -455,11 +455,38 @@ _FRONTEND_MAP = dict(FRONTEND_QUERIES)
 ALL_CATEGORIES = set(_BACKEND_MAP) | set(_FRONTEND_MAP)
 
 
+_FRONT_DEPS_RE = re.compile(
+    r'"(?:@angular/core|react|react-dom|vue|svelte|@sveltejs/kit|next|nuxt|solid-js|preact|lit|@ionic/\w+)"\s*:'
+    r'|^\s*flutter\s*:',
+    re.M,
+)
+_BACKEND_EXTS = {".py", ".java", ".go", ".rs", ".cs", ".php"}
+
+
+def _manifest_says_frontend(project_id: int) -> bool:
+    """True si un package.json/pubspec.yaml declara un framework de UI. Es la
+    señal fiable: un front Angular es .ts/.html/.css y por extension solo no se
+    distingue de un backend Node."""
+    for c in retriever.chunks_by_path_patterns(
+        project_id, ["%package.json", "%pubspec.yaml"], first_chunk_only=True
+    ):
+        if _FRONT_DEPS_RE.search(c.get("content", "")):
+            return True
+    return False
+
+
 def _detect_project_type(project_id: int) -> str:
     ext_counts = db.get_file_extensions(project_id)
-    frontend = sum(ext_counts.get(e, 0) for e in {".tsx", ".jsx"})
-    backend = sum(ext_counts.get(e, 0) for e in {".py", ".java", ".go", ".rs", ".cs"})
-    return "frontend" if frontend > backend else "backend"
+    frontend = sum(ext_counts.get(e, 0) for e in {".tsx", ".jsx", ".vue", ".svelte", ".dart"})
+    backend = sum(ext_counts.get(e, 0) for e in _BACKEND_EXTS)
+    if frontend > backend:
+        return "frontend"
+    # Sin archivos de backend en cantidad, un manifiesto con framework de UI decide.
+    # ponytail: umbral 25 %; un monorepo con mucho .cs y un front dentro seguira
+    # saliendo backend (hay que auditar cada proyecto por separado).
+    if _manifest_says_frontend(project_id) and backend * 4 < sum(ext_counts.values()):
+        return "frontend"
+    return "backend"
 
 
 # La recuperación estructural vive en retriever (la comparte describe_project).
