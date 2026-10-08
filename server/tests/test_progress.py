@@ -97,3 +97,11 @@ def test_indexer_embebe_por_lotes_y_el_progreso_es_monotono(tmp_path, monkeypatc
     assert max(added) <= 2 and len(added) >= 2, "no se embebio por lotes"
     assert seen == sorted(seen), f"el progreso retrocedio: {seen}"
     assert seen[0] == 0.0 and seen[-1] < 100.0  # el 100 lo pone run_index al terminar
+
+
+def test_rutas_se_guardan_siempre_con_slash(tmp_path):
+    sub = tmp_path / "src" / "app"
+    sub.mkdir(parents=True)
+    f = sub / "a.ts"
+    f.write_text("x")
+    assert indexer._rel(str(f), str(tmp_path)) == "src/app/a.ts"

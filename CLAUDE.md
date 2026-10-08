@@ -196,16 +196,10 @@ Opcionales con default (ver `.env.example`): `EMBEDDING_MODEL`, `AUDIT_TOP_K`, `
 - **Unica excepcion a "solo git"**: `self_update._install_deps()` ejecuta `pip install -r requirements.txt` con `sys.executable` (el interprete del propio venv). Ocurre SOLO bajo `check_server_version(update=true)` y SOLO si el commit descargado toco `requirements.txt`. Es deliberado: sin eso, una actualizacion que agrega una dependencia deja el server roto al siguiente arranque, y el usuario descubre el fallo cuando ya no tiene MCP para diagnosticarlo. Ningun otro comando del sistema.
 - No expuesto a internet — solo via Tailscale
 
-## Pendiente conocido: rutas con separador de Windows en el indice
+## Rutas del indice siempre con '/'
 
-`indexer.index_project` guarda `file_path` con `os.path.relpath`, asi que en
-Windows quedan con `\` y en Linux con `/` (la Postgres es compartida). Los
-patrones de `describe_project`/`audit_project` (`%/components/%`, `%/services/%`)
-asumen `/`, por lo que en proyectos indexados desde Windows la estructura sale
-vacia, el naming dominante sale "otro", el tipo de proyecto se detecta mal y el
-muestreo de la guia se sesga. Verificado el 2026-10-08 con `Erp_FrontNew`
-(5161 de 5170 rutas con `\`). Tambien falla por esto
-`tests/test_audit_polish.py::test_gitignore_respetado_en_repos_hijos`.
-Arreglo previsto: normalizar a `/` al indexar (`indexer.py`, `_git_ignored_paths`)
-y reindexar completos los proyectos indexados desde Windows (un incremental
-dejaria chunks duplicados bajo la ruta vieja). Sin hacer.
+`indexer._rel` normaliza `file_path` a `/` (antes `os.path.relpath` dejaba `\` en
+Windows y los patrones `%/components/%` de describe/audit no matcheaban). Los
+proyectos indexados ANTES de este fix siguen con `\` en Postgres/Chroma: hay que
+reindexarlos completos (`index_project` sin `incremental`); un incremental dejaria
+chunks duplicados bajo la ruta vieja.

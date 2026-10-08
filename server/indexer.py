@@ -4,6 +4,7 @@ import ast
 import hashlib
 import logging
 import os
+import posixpath
 import re
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -52,6 +53,15 @@ def _get_collection():
             metadata={"hnsw:space": "cosine"},
         )
     return _collection
+
+
+def _rel(path: str, base: str) -> str:
+    """Ruta relativa SIEMPRE con '/'. Las rutas se guardan en la Postgres
+    compartida entre Windows y Linux y se consultan con patrones tipo
+    '%/components/%': con '\' (relpath en Windows) esos patrones no matchean y
+    describe/audit muestrean mal. Los datos viejos guardados con '\' se
+    corrigen con un reindexado completo."""
+    return os.path.relpath(path, base).replace(os.sep, "/")
 
 
 def _file_hash(path: str) -> str:
@@ -330,7 +340,7 @@ def _git_ignored_paths(project_path: str) -> set[str]:
         for entry in out.split("\0"):
             if not entry:
                 continue
-            rel = os.path.relpath(os.path.join(root, entry.rstrip("/")), project_path)
+            rel = _rel(os.path.join(root, entry.rstrip("/")), project_path)
             ignored.add(rel)
     return ignored
 
@@ -388,11 +398,11 @@ def index_project(
     ignored = _git_ignored_paths(project_path)
 
     for root, dirs, files in os.walk(project_path):
-        rel_root = os.path.relpath(root, project_path)
+        rel_root = _rel(root, project_path)
         dirs[:] = [
             d for d in dirs
             if not security.is_dir_blocked(d)
-            and os.path.normpath(os.path.join(rel_root, d)) not in ignored
+            and posixpath.normpath(posixpath.join(rel_root, d)) not in ignored
         ]
 
         for filename in files:
@@ -402,7 +412,7 @@ def index_project(
                 logger.debug("Ignorando %s: %s", full_path, reason)
                 continue
 
-            rel_path = os.path.relpath(full_path, project_path)
+            rel_path = _rel(full_path, project_path)
             if rel_path in ignored:
                 logger.debug("Ignorando %s: listado en .gitignore", full_path)
                 continue
