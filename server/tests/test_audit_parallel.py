@@ -91,8 +91,9 @@ def test_audit_context_mantiene_la_tupla_de_siempre(monkeypatch):
 
 # ---------- tarifas por franja horaria (DeepSeek cobra el doble en peak) ----------
 
-def _at(hour: int) -> datetime:
-    return datetime(2026, 8, 20, hour, 30, tzinfo=timezone.utc)
+def _at(hour: int, day: int = 20) -> datetime:
+    # 2026-08-20 es jueves; 22 y 23 son sabado y domingo
+    return datetime(2026, 8, day, hour, 30, tzinfo=timezone.utc)
 
 
 def test_horas_peak_y_offpeak_segun_utc():
@@ -106,13 +107,31 @@ def test_horas_peak_y_offpeak_segun_utc():
     assert deepseek_client._is_peak(_at(17)) is False
 
 
+def test_fin_de_semana_nunca_es_peak():
+    assert deepseek_client._is_peak(_at(2, day=22)) is False
+    assert deepseek_client._is_peak(_at(7, day=23)) is False
+    assert deepseek_client._is_peak(_at(2, day=24)) is True, "el lunes vuelve el peak"
+
+
 def test_la_tarifa_peak_es_el_doble(monkeypatch):
     monkeypatch.setattr(deepseek_client, "_is_peak", lambda: False)
-    off_in, off_out = deepseek_client._rates()
+    off = deepseek_client._rates()
     monkeypatch.setattr(deepseek_client, "_is_peak", lambda: True)
-    peak_in, peak_out = deepseek_client._rates()
-    assert abs(peak_in - off_in * 2) < 1e-12
-    assert abs(peak_out - off_out * 2) < 1e-12
+    peak = deepseek_client._rates()
+    for o, p in zip(off, peak):
+        assert abs(p - o * 2) < 1e-12
+
+
+def test_entrada_cacheada_se_cobra_aparte(monkeypatch):
+    from types import SimpleNamespace as NS
+    usage = NS(input_tokens=149, cache_read_input_tokens=4096, output_tokens=38)
+    resp = NS(content=[NS(type="text", text="ok")], usage=usage, stop_reason="end_turn")
+    monkeypatch.setattr(deepseek_client, "_get_client", lambda: NS(messages=NS(create=lambda **kw: resp)))
+    monkeypatch.setattr(deepseek_client, "_is_peak", lambda: False)
+    _, in_tok, out_tok, cost = deepseek_client._call("hola", [])
+    assert (in_tok, out_tok) == (149 + 4096, 38)
+    rate_in, rate_out, rate_cache = deepseek_client._rates()
+    assert abs(cost - (149 * rate_in + 4096 * rate_cache + 38 * rate_out)) < 1e-12
 
 
 def test_rango_horario_mal_escrito_no_tumba_el_server(monkeypatch):

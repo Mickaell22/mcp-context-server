@@ -24,7 +24,7 @@ DEEPSEEK_PROXY_KEY = os.getenv("DEEPSEEK_PROXY_KEY", "")
 # DeepSeek retira nombres de modelo sin avisar: "deepseek-chat" quedo invalido y
 # la API responde 400, lo que hacia caer todas las llamadas al fallback de chunks
 # crudos (coste 0, summary vacio) sin que se notara. Configurable por entorno.
-DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-v4-flash")
+DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-flash")
 # Presupuesto de salida. En los modelos v4 el bloque `thinking` SALE DE AQUI: con
 # 4096 el modelo se quedaba sin presupuesto razonando sobre un lote grande del
 # audit y devolvia una respuesta sin texto, que caia al fallback de chunks crudos
@@ -40,15 +40,21 @@ DEEPSEEK_TIMEOUT = float(os.getenv("DEEPSEEK_TIMEOUT", "120.0"))
 # Limite de caracteres del fallback en crudo cuando DeepSeek no responde
 COMPRESS_FALLBACK_MAX_CHARS = int(os.getenv("COMPRESS_FALLBACK_MAX_CHARS", "12000"))
 
-# Precios USD por 1M tokens. Desde 2026-08-16 DeepSeek factura por franja horaria:
+# Precios USD por 1M tokens (deepseek-flash, revisados 2026-10-09 contra
+# api-docs.deepseek.com/quick_start/pricing). DeepSeek factura por franja horaria:
 # off-peak cuesta la mitad que peak. Las horas peak se declaran en UTC (01:00-04:00
-# y 06:00-10:00); en hora de Ecuador (UTC-5) eso cae en 20:00-23:00 y 01:00-05:00,
-# o sea que trabajando de dia siempre es off-peak.
-# En env vars y no hardcodeados: los precios ya cambiaron una vez y volveran a hacerlo.
-DEEPSEEK_PRICE_IN_OFFPEAK = float(os.getenv("DEEPSEEK_PRICE_IN_OFFPEAK", "0.22"))
-DEEPSEEK_PRICE_OUT_OFFPEAK = float(os.getenv("DEEPSEEK_PRICE_OUT_OFFPEAK", "0.66"))
-DEEPSEEK_PRICE_IN_PEAK = float(os.getenv("DEEPSEEK_PRICE_IN_PEAK", "0.44"))
-DEEPSEEK_PRICE_OUT_PEAK = float(os.getenv("DEEPSEEK_PRICE_OUT_PEAK", "1.32"))
+# y 06:00-10:00) y solo de LUNES A VIERNES: el fin de semana es off-peak todo el dia.
+# En hora de Ecuador (UTC-5) eso cae en 20:00-23:00 y 01:00-05:00, o sea que
+# trabajando de dia siempre es off-peak.
+# La entrada que DeepSeek ya tenia en cache (cache_read_input_tokens) cobra aparte,
+# ~50 veces mas barata que la entrada normal (cache miss).
+# En env vars y no hardcodeados: los precios ya cambiaron dos veces y volveran a hacerlo.
+DEEPSEEK_PRICE_IN_OFFPEAK = float(os.getenv("DEEPSEEK_PRICE_IN_OFFPEAK", "0.15"))
+DEEPSEEK_PRICE_OUT_OFFPEAK = float(os.getenv("DEEPSEEK_PRICE_OUT_OFFPEAK", "0.60"))
+DEEPSEEK_PRICE_CACHE_OFFPEAK = float(os.getenv("DEEPSEEK_PRICE_CACHE_OFFPEAK", "0.003"))
+DEEPSEEK_PRICE_IN_PEAK = float(os.getenv("DEEPSEEK_PRICE_IN_PEAK", "0.30"))
+DEEPSEEK_PRICE_OUT_PEAK = float(os.getenv("DEEPSEEK_PRICE_OUT_PEAK", "1.20"))
+DEEPSEEK_PRICE_CACHE_PEAK = float(os.getenv("DEEPSEEK_PRICE_CACHE_PEAK", "0.006"))
 # Rangos horarios peak en UTC, como "inicio-fin" (fin exclusivo) separados por coma.
 DEEPSEEK_PEAK_HOURS_UTC = os.getenv("DEEPSEEK_PEAK_HOURS_UTC", "1-4,6-10")
 

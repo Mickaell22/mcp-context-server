@@ -22,8 +22,10 @@ from config import (
     PROFILE_MAX_TOKENS,
     DEEPSEEK_PRICE_IN_OFFPEAK,
     DEEPSEEK_PRICE_OUT_OFFPEAK,
+    DEEPSEEK_PRICE_CACHE_OFFPEAK,
     DEEPSEEK_PRICE_IN_PEAK,
     DEEPSEEK_PRICE_OUT_PEAK,
+    DEEPSEEK_PRICE_CACHE_PEAK,
     DEEPSEEK_PEAK_HOURS_UTC,
 )
 
@@ -47,16 +49,24 @@ def _peak_ranges() -> list[tuple[int, int]]:
 
 
 def _is_peak(now: datetime | None = None) -> bool:
-    """True si la hora UTC cae en franja peak (el doble de precio)."""
-    hour = (now or datetime.now(timezone.utc)).hour
-    return any(ini <= hour < fin for ini, fin in _peak_ranges())
+    """True si la hora UTC cae en franja peak (el doble de precio). Peak solo
+    existe de lunes a viernes; sabado y domingo son off-peak todo el dia.
+    ponytail: los feriados chinos (tambien off-peak) no se modelan; en esos dias
+    el costo registrado sale sobrestimado, nunca subestimado."""
+    now = now or datetime.now(timezone.utc)
+    if now.weekday() >= 5:
+        return False
+    return any(ini <= now.hour < fin for ini, fin in _peak_ranges())
 
 
-def _rates() -> tuple[float, float]:
-    """(precio_input, precio_output) por TOKEN segun la franja horaria actual."""
+def _rates() -> tuple[float, float, float]:
+    """(precio_input, precio_output, precio_input_cacheado) por TOKEN segun la
+    franja horaria actual."""
     if _is_peak():
-        return DEEPSEEK_PRICE_IN_PEAK / 1_000_000, DEEPSEEK_PRICE_OUT_PEAK / 1_000_000
-    return DEEPSEEK_PRICE_IN_OFFPEAK / 1_000_000, DEEPSEEK_PRICE_OUT_OFFPEAK / 1_000_000
+        prices = (DEEPSEEK_PRICE_IN_PEAK, DEEPSEEK_PRICE_OUT_PEAK, DEEPSEEK_PRICE_CACHE_PEAK)
+    else:
+        prices = (DEEPSEEK_PRICE_IN_OFFPEAK, DEEPSEEK_PRICE_OUT_OFFPEAK, DEEPSEEK_PRICE_CACHE_OFFPEAK)
+    return tuple(p / 1_000_000 for p in prices)
 
 _client: anthropic.Anthropic | None = None
 
@@ -187,10 +197,18 @@ def _call(prompt: str, chunks: list[dict], max_tokens: int | None = None) -> tup
                         f"o acorta lo que se le pide."
                     )
                 raise ValueError(f"Respuesta sin bloque de texto (bloques: {blocks})")
-            input_tokens = response.usage.input_tokens
+            # Semantica Anthropic (verificada contra DeepSeek): input_tokens son
+            # SOLO los no cacheados; los leidos de cache vienen aparte. Se suman
+            # para la metrica y se cobran cada uno a su precio.
+            cached_tokens = getattr(response.usage, "cache_read_input_tokens", None) or 0
+            input_tokens = response.usage.input_tokens + cached_tokens
             output_tokens = response.usage.output_tokens
-            rate_in, rate_out = _rates()
-            cost = (input_tokens * rate_in) + (output_tokens * rate_out)
+            rate_in, rate_out, rate_cache = _rates()
+            cost = (
+                (input_tokens - cached_tokens) * rate_in
+                + cached_tokens * rate_cache
+                + output_tokens * rate_out
+            )
             logger.debug("DeepSeek: %d in / %d out tokens, $%.6f", input_tokens, output_tokens, cost)
             return content, input_tokens, output_tokens, cost
         except _Unretryable as e:
