@@ -255,9 +255,11 @@ async def handle(args: dict, session_id: int | None) -> dict:
     tr = progress.track("describe", name) if name else None
     try:
         result = await _handle(args, session_id, tr)
-    except Exception as exc:
+    except BaseException as exc:
+        # BaseException para cubrir la cancelacion del cliente (CancelledError):
+        # sin esto el job quedaba en "running" para siempre en index_status.
         if tr:
-            tr.fail(str(exc))
+            tr.fail("cancelado" if isinstance(exc, asyncio.CancelledError) else str(exc))
         raise
     if tr:
         tr.fail(result["error"]) if isinstance(result, dict) and "error" in result else tr.done()

@@ -127,16 +127,23 @@ async def run_index(name: str, project_id: int, path: str, incremental: bool = F
         logger.info("Indexando %s: %.0f%% - %s", name, percent, message)
         _notify(ctx, loop, percent, message)
 
-    try:
-        result = await asyncio.to_thread(indexer.index_project, project_id, path, incremental, report)
-    except Exception as exc:
+    # El estado final se escribe DENTRO del hilo: si el cliente cancela la
+    # llamada, la corrutina muere pero el hilo sigue indexando hasta el final.
+    # Antes el "done" se escribia aca afuera y nunca llegaba, el job quedaba en
+    # "running" para siempre y busy_error bloqueaba el proyecto hasta reiniciar.
+    def work():
+        try:
+            result = indexer.index_project(project_id, path, incremental, report)
+        except Exception as exc:
+            with _lock:
+                job.update(status="error", message=str(exc), finished_at=time.time())
+            raise
+        report(100.0, "Terminado")
         with _lock:
-            job.update(status="error", message=str(exc), finished_at=time.time())
-        raise
-    report(100.0, "Terminado")
-    with _lock:
-        job.update(status="done", finished_at=time.time())
-    return result
+            job.update(status="done", finished_at=time.time())
+        return result
+
+    return await asyncio.to_thread(work)
 
 
 class Tracker:

@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import json
 import os
+import threading
+import time
 from datetime import datetime
 
 import psycopg2
@@ -11,21 +13,62 @@ from config import DATABASE_URL, DEVICE_ID
 
 
 def get_connection():
-    return psycopg2.connect(DATABASE_URL)
+    # keepalives: que el proxy de Railway no corte en silencio una conexion
+    # que el pool tiene guardada.
+    return psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=30)
+
+
+# Pool de conexiones. Antes cada llamada a db.* abria una conexion TLS nueva a
+# Railway (~0.6 s) para una consulta de ~0.17 s, y una tool encadena varias.
+# ponytail: lista + lock en vez de psycopg2.pool, porque hace falta descartar las
+# conexiones ociosas por mas de _POOL_MAX_IDLE (el proxy puede haberlas cerrado
+# y psycopg2 no lo nota hasta fallar la consulta). Techo: _POOL_SIZE conexiones
+# guardadas; si hay mas hilos a la vez, los demas abren y cierran como antes.
+_POOL_SIZE = 4
+_POOL_MAX_IDLE = 60.0
+_pool: list[tuple[object, float]] = []
+_pool_lock = threading.Lock()
+
+
+def _acquire():
+    now = time.monotonic()
+    with _pool_lock:
+        while _pool:
+            conn, last = _pool.pop()
+            if not conn.closed and now - last < _POOL_MAX_IDLE:
+                return conn
+            conn.close()
+    return get_connection()
+
+
+def _release(conn, broken: bool) -> None:
+    if not broken and not conn.closed:
+        with _pool_lock:
+            if len(_pool) < _POOL_SIZE:
+                _pool.append((conn, time.monotonic()))
+                return
+    conn.close()
 
 
 @contextmanager
 def cursor():
-    conn = get_connection()
+    conn = _acquire()
+    broken = False
     try:
         with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
             yield cur
             conn.commit()
-    except Exception:
-        conn.rollback()
+    except Exception as exc:
+        # Una conexion caida no vuelve al pool: la siguiente llamada abre otra.
+        broken = isinstance(exc, (psycopg2.OperationalError, psycopg2.InterfaceError))
+        if not conn.closed:
+            try:
+                conn.rollback()
+            except psycopg2.Error:
+                broken = True
         raise
     finally:
-        conn.close()
+        _release(conn, broken)
 
 
 # ---------- schema / multi-dispositivo ----------
