@@ -15,10 +15,18 @@ async def handle(args: dict, session_id: int | None) -> dict:
     # figura al dia y aca no tiene un solo vector.
     sin_chunks = set(retriever.projects_without_chunks([p["id"] for p in projects]))
     result = []
+    other_devices = []
     for p in projects:
         path = db.resolve_project_path(p, DEVICE_ID)
         registered = bool((p.get("device_paths") or {}).get(DEVICE_ID))
         here = registered and os.path.isdir(path)
+        if not here and p["id"] in sin_chunks:
+            # Ni en este disco ni en este Chroma: aca no se puede consultar ni
+            # indexar. Solo el nombre — antes iban sus 10 campos con la ruta de
+            # otro equipo, y eran la mayoria de la respuesta (~13K caracteres
+            # con 45 proyectos, 35 de otra maquina) en cada sesion.
+            other_devices.append(p["name"])
+            continue
         last_indexed = (p.get("device_indexed_at") or {}).get(DEVICE_ID)
         # Aviso de indice viejo SIN red (solo lee el repo en disco): asi llega en
         # la llamada que ya se hace al entrar a un directorio, sin tener que
@@ -52,6 +60,11 @@ async def handle(args: dict, session_id: int | None) -> dict:
             }
         )
     out = {"projects": result}
+    if other_devices:
+        out["other_devices"] = {
+            "names": other_devices,
+            "note": "Registrados en otro equipo, sin ruta ni indice aca. Para usarlos: register_project(path=<ruta local>).",
+        }
 
     # Aviso pasivo de version nueva del PROPIO server. Va aca porque list_projects
     # es la llamada que ya se hace al entrar a cualquier proyecto: asi el aviso

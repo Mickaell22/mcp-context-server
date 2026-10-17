@@ -165,9 +165,15 @@ class _Unretryable(RuntimeError):
     """Fallo determinista: reintentarlo solo gasta tiempo y da el mismo error."""
 
 
-def _call(prompt: str, chunks: list[dict], max_tokens: int | None = None) -> tuple[str, int, int, float]:
+def _call(
+    prompt: str, chunks: list[dict], max_tokens: int | None = None, thinking: bool = True,
+) -> tuple[str, int, int, float]:
     """Llamada a DeepSeek con reintentos y fallback a chunks crudos. Compartida
-    por compress_context, audit_context y profile_context."""
+    por compress_context, audit_context y profile_context.
+
+    thinking=False apaga el bloque de razonamiento (verificado contra el endpoint
+    Anthropic de DeepSeek: acepta `thinking: {type: disabled}`). Para tareas que
+    solo resumen, razonar no mejora nada y cuesta latencia y tokens de salida."""
     client = _get_client()
     budget = max_tokens or DEEPSEEK_MAX_TOKENS
     last_error: Exception | None = None
@@ -177,6 +183,7 @@ def _call(prompt: str, chunks: list[dict], max_tokens: int | None = None) -> tup
                 model=DEEPSEEK_MODEL,
                 max_tokens=budget,
                 messages=[{"role": "user", "content": prompt}],
+                **({} if thinking else {"extra_body": {"thinking": {"type": "disabled"}}}),
             )
             # Los modelos v4 anteponen un bloque `thinking` al `text`, asi que
             # content[0] no siempre es texto: se concatenan solo los bloques de
@@ -391,4 +398,5 @@ def compress_context(query: str, chunks: list[dict]) -> tuple[str, int, int, flo
         f"Usa el mismo idioma que la pregunta. Se conciso.\n\n"
         f"{_build_fragments(chunks)}"
     )
-    return _call(prompt, chunks)
+    # Comprimir es resumir fragmentos: sin thinking, ~40% menos latencia.
+    return _call(prompt, chunks, thinking=False)

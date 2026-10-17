@@ -65,6 +65,27 @@ def test_run_index_marca_error_y_libera(monkeypatch):
     assert progress.busy_error("rota") is None  # un error no deja el proyecto bloqueado
 
 
+def test_run_index_cancelado_igual_termina_el_job(monkeypatch):
+    # Caso real: el usuario cancelo la llamada, el hilo termino de indexar y el
+    # job quedo en "running" al 95% para siempre, bloqueando reindexar.
+    def fake_index(project_id, path, incremental=False, report=None):
+        time.sleep(0.2)
+        return 1, ["a"]
+
+    monkeypatch.setattr(indexer, "index_project", fake_index)
+    progress.JOBS.clear()
+
+    async def _run():
+        task = asyncio.create_task(progress.run_index("cancelado", 1, "/x"))
+        await asyncio.sleep(0.05)
+        task.cancel()
+        await asyncio.sleep(0.4)  # el hilo sigue y termina por su cuenta
+
+    asyncio.run(_run())
+    assert progress.snapshot("cancelado")["cancelado"]["status"] == "done"
+    assert progress.busy_error("cancelado") is None
+
+
 def test_indexer_embebe_por_lotes_y_el_progreso_es_monotono(tmp_path, monkeypatch):
     for i in range(5):
         (tmp_path / f"f{i}.py").write_text("x = 1\n" * 40, encoding="utf-8")

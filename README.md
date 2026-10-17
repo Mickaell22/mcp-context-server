@@ -300,7 +300,7 @@ PostgreSQL es **compartido en la nube** entre todas las maquinas que usen el ser
 
 Consecuencias importantes:
 
-- `list_projects` muestra **todos** los proyectos registrados desde cualquier maquina; `indexed_here` distingue los que esta maquina puede consultar.
+- `list_projects` muestra completos los proyectos que esta maquina tiene en disco o en su Chroma; `indexed_here` distingue los que puede consultar. Los registrados solo en otro equipo van como nombres en `other_devices` (sus rutas de otra maquina no sirven aca y eran la mayor parte de la respuesta).
 - `query_context`, `audit_project` y `get_file` solo funcionan para proyectos indexados **en esa maquina**. Un proyecto que aparece en la lista pero devuelve contexto vacio normalmente fue indexado en otra maquina — no esta corrupto. `query_context` lo dice explicitamente en un campo `warning` en vez de devolver un contexto vacio mudo.
 - Para usar un proyecto en una nueva maquina, hay que re-indexarlo localmente aunque ya aparezca en la lista: `index_project` (si el path en Postgres coincide con la ruta local) o `register_project` (si el path es distinto).
 - El delta indexing **no confia en el indexado de otro equipo**: los hashes se guardan por `device_id`, asi que el primer `index_project(incremental=true)` de cada maquina se comporta como un full y reconstruye su Chroma. Antes los hashes eran globales y el incremental respondia "sin cambios" mientras el indice local estaba vacio o viejo — el proyecto quedaba inconsultable ahi sin forma obvia de arreglarlo.
@@ -332,6 +332,12 @@ cd server && ./.venv/bin/python -m pytest tests/ -q
 
 ```bash
 cd server && ./.venv/bin/python eval/run_eval.py
+```
+
+**Benchmark de latencia (`eval/bench.py`).** Mide sobre este mismo repo la latencia de una llamada a Postgres, `query_context` (3 queries fijas: segundos y tokens), `list_projects` (segundos y tamaño de la respuesta) y un incremental sin cambios. Sirve para comparar ramas: correrlo en cada una (por ejemplo con `git worktree`) y diffear los JSON. No escribe en `queries`.
+
+```bash
+cd server && ./.venv/bin/python eval/bench.py /tmp/bench.json
 ```
 
 El *golden set* vive en `tests/fixtures/expected.json` (archivo, categoría, keywords, severidad por bug, más `must_not_flag` para los falsos positivos). Para medir recall hay que tener ground truth, y la única forma confiable es sembrar los bugs uno mismo: por eso las fixtures son sintéticas, no un repo real.
