@@ -71,3 +71,6 @@ logs/
 secrets.json
 credentials.json
 serviceAccount.json
+
+# Config local de Claude Code
+.claude/
