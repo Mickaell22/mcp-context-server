@@ -32,7 +32,7 @@ def _load_files(root: Path) -> dict[str, str]:
     files = {}
     for p in root.rglob("*"):
         if p.is_file():
-            rel = str(p.relative_to(root))
+            rel = p.relative_to(root).as_posix()
             files[rel] = p.read_text(encoding="utf-8")
     return files
 
