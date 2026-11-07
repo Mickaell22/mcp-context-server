@@ -9,13 +9,16 @@ from datetime import datetime
 import psycopg2
 import psycopg2.extras
 from contextlib import contextmanager
-from config import DATABASE_URL, DEVICE_ID
+from config import DATABASE_URL, DEVICE_ID, DB_CONNECT_TIMEOUT
 
 
 def get_connection():
     # keepalives: que el proxy de Railway no corte en silencio una conexion
-    # que el pool tiene guardada.
-    return psycopg2.connect(DATABASE_URL, keepalives=1, keepalives_idle=30)
+    # que el pool tiene guardada. connect_timeout: sin el, un proxy que no
+    # responde deja el connect TCP esperando sin limite.
+    return psycopg2.connect(
+        DATABASE_URL, keepalives=1, keepalives_idle=30, connect_timeout=DB_CONNECT_TIMEOUT,
+    )
 
 
 # Pool de conexiones. Antes cada llamada a db.* abria una conexion TLS nueva a

@@ -63,6 +63,11 @@ GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 
 # PostgreSQL
 DATABASE_URL = _require("DATABASE_URL")
+# Segundos para abrir la conexion. Sin tope, un proxy de Railway mudo colgaba la tool.
+DB_CONNECT_TIMEOUT = int(os.getenv("DB_CONNECT_TIMEOUT", "10"))
+# Tope de la recuperacion de query_context (embedding + Chroma). Cubre la primera
+# carga del modelo en una maquina lenta; si se pasa, la tool falla citando la etapa.
+RETRIEVAL_TIMEOUT = float(os.getenv("RETRIEVAL_TIMEOUT", "180"))
 
 # Rutas locales
 PROJECTS_BASE_PATH = _require("PROJECTS_BASE_PATH")

@@ -164,6 +164,8 @@ mcp-context-server/
 - **El estado final de un indexado se escribe DENTRO del hilo (`progress.run_index`)**: si el cliente cancela la llamada, la corrutina recibe `CancelledError` pero el hilo de `to_thread` sigue hasta el final. Antes el "done" se escribia despues del `await`, nunca llegaba, el job quedaba en `running` para siempre y `busy_error` bloqueaba reindexar el proyecto hasta reiniciar Claude Code (caso real, 2026-10-17). Audit y describe capturan `BaseException` y marcan el job como `cancelado`. Ojo: `CancelledError` no es `Exception`.
 - **`list_projects` no lista completos los proyectos de otros equipos**: los que no estan en este disco NI en este Chroma salen solo como nombre en `other_devices`. Con 45 proyectos (35 de otra maquina) la respuesta bajo de ~13K a ~4K caracteres, y es la primera llamada de cada sesion.
 
+- **Primera `query_context` colgada 30 min sin rastro (2026-11-06)**: la carga perezosa hacia que la primera consulta pagara import de torch + modelo + Chroma + conexion a Postgres, todo sincrono en el event loop y sin ningun tope. En un equipo Windows quedo 1800 s sin respuesta. Medido en la laptop: `SentenceTransformer(nombre)` hace **5 requests a huggingface.co en cada carga aunque el modelo este en cache**; detras de un proxy/firewall esa es la sospechosa. Arreglo: (1) `_get_model` intenta `local_files_only=True` y solo descarga si no hay cache (`OSError`) — 9.2 s a 3.1 s y cero red. (2) `main._warmup` precalienta Chroma + modelo en segundo plano tras el handshake; `_model_lock`/`_chroma_lock` hacen que una consulta temprana espere esa carga en vez de duplicarla. (3) `query_context` corre retrieve/compress en hilos y el retrieve tiene `RETRIEVAL_TIMEOUT`; al vencer, el error cita `indexer.init_stage`. Python no puede matar el hilo colgado: la consulta falla rapido pero la siguiente esperara en el mismo lock hasta que el hilo vuelva. (4) `connect_timeout=DB_CONNECT_TIMEOUT` en `get_connection`. Si vuelve a pasar, el mensaje de error ya dice en que etapa fue.
+
 ## Variables de entorno necesarias
 
 Ver `.env.example`. Las criticas son:
@@ -176,7 +178,7 @@ Ver `.env.example`. Las criticas son:
 - `DEEPSEEK_TIMEOUT` — timeout (segundos) del cliente DeepSeek, default 60.0
 - `DEVICE_ID` — identificador de este equipo para las rutas por dispositivo (fallback al hostname)
 
-Opcionales con default (ver `.env.example`): `EMBEDDING_MODEL`, `AUDIT_TOP_K`, `AUDIT_BATCH_MAX_CHARS`, `AUDIT_MAX_CHUNKS`, `AUDIT_RAW_MAX_CHARS`, `AUDIT_VERIFY_ENABLED`, `AUDIT_CONCURRENCY`, `PROFILE_MAX_TOKENS`, `MAX_DISTANCE`, `RERANK_ENABLED`, `RERANK_CANDIDATE_MULT`, `RERANK_W_SEM`, `RERANK_W_LEX`.
+Opcionales con default (ver `.env.example`): `DB_CONNECT_TIMEOUT`, `RETRIEVAL_TIMEOUT`, `EMBEDDING_MODEL`, `AUDIT_TOP_K`, `AUDIT_BATCH_MAX_CHARS`, `AUDIT_MAX_CHUNKS`, `AUDIT_RAW_MAX_CHARS`, `AUDIT_VERIFY_ENABLED`, `AUDIT_CONCURRENCY`, `PROFILE_MAX_TOKENS`, `MAX_DISTANCE`, `RERANK_ENABLED`, `RERANK_CANDIDATE_MULT`, `RERANK_W_SEM`, `RERANK_W_LEX`.
 
 ## Tests y evaluación
 

@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import asyncio
+
 import db
+import indexer
 import security
 import retriever
 import deepseek_client
-from config import TOP_K_RESULTS, DEVICE_ID
+from config import TOP_K_RESULTS, DEVICE_ID, RETRIEVAL_TIMEOUT
 from db import log_blocked_attempt, log_query
 
 
@@ -37,13 +40,28 @@ async def handle(args: dict, session_id: int | None) -> dict:
         projects.append(p)
 
     project_ids = [p["id"] for p in projects]
-    chunks = retriever.retrieve(query, project_ids, top_k=top_k, code_only=code_only)
+    # En un hilo: la recuperacion (modelo + Chroma) y DeepSeek son sincronos y
+    # bloqueaban el event loop, asi que ni index_status respondia mientras tanto.
+    # El tope convierte un cuelgue silencioso de 30 min en un error que dice
+    # en que etapa quedo. ponytail: el hilo colgado sigue vivo (Python no puede
+    # matarlo); la siguiente consulta esperara en el mismo lock de indexer.
+    try:
+        chunks = await asyncio.wait_for(
+            asyncio.to_thread(retriever.retrieve, query, project_ids, top_k=top_k, code_only=code_only),
+            RETRIEVAL_TIMEOUT,
+        )
+    except TimeoutError:
+        return {"error": (
+            f"La recuperacion no respondio en {RETRIEVAL_TIMEOUT:.0f}s "
+            f"(etapa: {indexer.init_stage}). Revisar red a huggingface.co si carga el "
+            f"modelo, o un lock sobre CHROMA_PERSIST_PATH si abre Chroma."
+        )}
 
     if not chunks:
         # Distinguir "no hay match" de "este equipo no tiene el indice": el
         # segundo caso se veia igual (context vacio) y hacia parecer que el
         # codigo no existia, cuando faltaba indexar localmente.
-        sin_indice = retriever.projects_without_chunks(project_ids)
+        sin_indice = await asyncio.to_thread(retriever.projects_without_chunks, project_ids)
         empty = {"context": "", "files_referenced": [], "locations": [], "tokens_used": 0}
         if sin_indice:
             faltan = [p["name"] for p in projects if p["id"] in sin_indice]
@@ -54,7 +72,9 @@ async def handle(args: dict, session_id: int | None) -> dict:
             )
         return empty
 
-    context, input_tokens, output_tokens, cost = deepseek_client.compress_context(query, chunks)
+    context, input_tokens, output_tokens, cost = await asyncio.to_thread(
+        deepseek_client.compress_context, query, chunks
+    )
 
     files_referenced = list(dict.fromkeys(
         f"{c['project_id']}:{c['file_path']}" if len(projects) > 1 else c["file_path"]

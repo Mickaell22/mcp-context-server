@@ -4,11 +4,13 @@ import asyncio
 import json
 import logging
 import sys
+import time
 from mcp.server import Server
 from mcp.server.stdio import stdio_server
 from mcp import types
 
 import db
+import indexer
 import security
 from config import LOG_LEVEL
 import self_update
@@ -313,6 +315,25 @@ async def main():
         except Exception as exc:
             logger.info("No se pudo comprobar la version del server: %s", exc)
 
+    async def _warmup() -> None:
+        # La primera consulta pagaba de golpe import de torch + carga del modelo +
+        # apertura de Chroma. Se adelanta en segundo plano, DESPUES del handshake.
+        # Los locks de indexer hacen que una consulta temprana espere esta carga
+        # en vez de duplicarla. ponytail: carga el modelo (~300 MB RAM) aunque la
+        # sesion nunca consulte; si molesta, hacerlo opcional por env.
+        def _sync() -> None:
+            t = time.monotonic()
+            indexer._get_collection()
+            logger.info("Precalentamiento: Chroma abierto en %.1fs", time.monotonic() - t)
+            t = time.monotonic()
+            indexer._get_model()
+            logger.info("Precalentamiento: modelo cargado en %.1fs", time.monotonic() - t)
+
+        try:
+            await asyncio.to_thread(_sync)
+        except Exception:
+            logger.error("Fallo el precalentamiento (etapa: %s)", indexer.init_stage, exc_info=True)
+
     async with stdio_server() as (read_stream, write_stream):
         # Las referencias se guardan a proposito: el loop solo mantiene una
         # referencia debil a las tasks, y una task de fondo sin referencia
@@ -320,6 +341,7 @@ async def main():
         background = [
             asyncio.create_task(_startup_db_init()),
             asyncio.create_task(_check_self_update()),
+            asyncio.create_task(_warmup()),
         ]
         try:
             await app.run(read_stream, write_stream, app.create_initialization_options())

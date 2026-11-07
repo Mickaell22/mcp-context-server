@@ -6,6 +6,7 @@ import logging
 import os
 import posixpath
 import re
+import threading
 from pathlib import Path
 from typing import TYPE_CHECKING
 import chromadb
@@ -31,27 +32,52 @@ _chroma: chromadb.PersistentClient | None = None
 _collection = None
 
 
+# Locks de la inicializacion perezosa: el precalentamiento de main.py y la
+# primera consulta pueden llegar a la vez; sin lock ambos cargarian el modelo.
+_model_lock = threading.Lock()
+_chroma_lock = threading.Lock()
+# Etapa en curso de la inicializacion. query_context la cita cuando se le acaba
+# el tiempo: sin esto un cuelgue no dejaba rastro de en que paso quedo.
+init_stage = "sin iniciar"
+
+
 def _get_model() -> SentenceTransformer:
-    global _model
+    global _model, init_stage
     if _model is None:
-        # Import diferido: sentence_transformers arrastra torch/transformers/
-        # sklearn (~8s de import) que si estuviera a nivel de modulo bloquearia
-        # el handshake MCP con Claude Code antes de que el proceso llegue a
-        # leer stdin. Se paga una sola vez, en el primer uso real del modelo.
-        from sentence_transformers import SentenceTransformer
-        logger.info("Cargando modelo de embeddings: %s", EMBEDDING_MODEL)
-        _model = SentenceTransformer(EMBEDDING_MODEL)
+        with _model_lock:
+            if _model is None:
+                # Import diferido: sentence_transformers arrastra torch/transformers/
+                # sklearn (~8s de import) que si estuviera a nivel de modulo bloquearia
+                # el handshake MCP con Claude Code antes de que el proceso llegue a
+                # leer stdin. Lo paga el precalentamiento de main.py en segundo plano.
+                init_stage = "importando sentence_transformers"
+                from sentence_transformers import SentenceTransformer
+                init_stage = f"cargando modelo {EMBEDDING_MODEL}"
+                logger.info("Cargando modelo de embeddings: %s", EMBEDDING_MODEL)
+                try:
+                    # Sin local_files_only, cada carga consulta huggingface.co (5
+                    # requests aunque el modelo este en cache). Detras de un proxy
+                    # o firewall esa consulta puede colgarse sin limite.
+                    _model = SentenceTransformer(EMBEDDING_MODEL, local_files_only=True)
+                except OSError:
+                    logger.info("Modelo %s no esta en cache: descargando", EMBEDDING_MODEL)
+                    init_stage = f"descargando modelo {EMBEDDING_MODEL} de huggingface.co"
+                    _model = SentenceTransformer(EMBEDDING_MODEL)
+                init_stage = "listo"
     return _model
 
 
 def _get_collection():
-    global _chroma, _collection
+    global _chroma, _collection, init_stage
     if _collection is None:
-        _chroma = chromadb.PersistentClient(path=CHROMA_PERSIST_PATH)
-        _collection = _chroma.get_or_create_collection(
-            name=CHROMA_COLLECTION,
-            metadata={"hnsw:space": "cosine"},
-        )
+        with _chroma_lock:
+            if _collection is None:
+                init_stage = f"abriendo Chroma en {CHROMA_PERSIST_PATH}"
+                _chroma = chromadb.PersistentClient(path=CHROMA_PERSIST_PATH)
+                _collection = _chroma.get_or_create_collection(
+                    name=CHROMA_COLLECTION,
+                    metadata={"hnsw:space": "cosine"},
+                )
     return _collection
 
 
