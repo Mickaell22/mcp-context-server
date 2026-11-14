@@ -121,32 +121,30 @@ DeepSeek Flash API  ────────────────────
 
 ## Instalacion
 
+La forma recomendada es dejar que Claude Code la haga: abri Claude Code en la carpeta del repo y pedile
+
+> Lee `docs/INSTALACION.md` e instala mcp-context-server
+
+La guia le hace elegir el modo contigo y verifica el resultado. Hay dos modos, con el mismo codigo; solo cambia donde vive la Postgres:
+
+| Modo | Para quien | `DATABASE_URL` |
+|---|---|---|
+| **Local** | Un solo equipo. Recomendado para empezar | Postgres en `127.0.0.1` (Docker/Podman o la del sistema) |
+| **Multi-equipo** | Varios equipos que comparten proyectos e historial | Una Postgres comun (Railway, Neon, Supabase o un server propio por Tailscale) |
+
+Se puede empezar en local y pasar a multi-equipo despues con un `pg_dump`, sin perder nada.
+
+### Instalacion manual (resumen)
+
 ```bash
 git clone https://github.com/Mickaell22/mcp-context-server
 cd mcp-context-server/server
-
 python3 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+.venv/bin/pip install -r requirements.txt
+cp ../.env.example .env       # completar DEEPSEEK_API_KEY, DATABASE_URL, PROJECTS_BASE_PATH, CHROMA_PERSIST_PATH
 ```
 
-Copia `.env.example` (en la raiz del repo) a `server/.env` y completa las variables:
-
-```bash
-cp ../.env.example .env
-```
-
-Aplica el schema en tu PostgreSQL de Railway (solo la primera vez):
-
-```bash
-psql $DATABASE_URL -f ../sql/schema.sql
-```
-
-Levanta el servidor:
-
-```bash
-.venv/bin/python main.py
-```
+No hace falta aplicar `sql/schema.sql` a mano: el server lo aplica al arrancar (es idempotente, asi que en una base vacia crea todo y en una existente solo agrega lo que falte). Despues, registralo en Claude Code (ver abajo) y reinicia Claude Code.
 
 ### Estructura del server
 

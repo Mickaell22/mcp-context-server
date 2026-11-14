@@ -5,6 +5,7 @@ import os
 import threading
 import time
 from datetime import datetime
+from pathlib import Path
 
 import psycopg2
 import psycopg2.extras
@@ -77,49 +78,22 @@ def cursor():
 # ---------- schema / multi-dispositivo ----------
 
 def ensure_schema() -> None:
-    """Migraciones idempotentes sobre la Postgres compartida.
+    """Aplica `sql/schema.sql` entero al arrancar.
 
-    Varios equipos comparten esta Postgres; cada uno corre el server y ejecuta
-    esto al arrancar. ADD COLUMN IF NOT EXISTS es seguro y no destructivo.
+    El archivo es idempotente de punta a punta (CREATE ... IF NOT EXISTS,
+    ADD COLUMN IF NOT EXISTS), asi que sirve igual para:
+    - una Postgres vacia (modo local, un solo equipo): crea todo, sin el paso
+      manual de `psql -f schema.sql` que antes era obligatorio;
+    - la Postgres compartida entre equipos: solo agrega lo que falte. Ver los
+      comentarios del .sql para el por que de device_paths, indexed_files.device_id,
+      device_indexed_at y project_profiles.
 
-    - projects.device_paths: ruta local del proyecto por dispositivo.
-    - indexed_files.device_id: DE QUE dispositivo es ese estado indexado. Los
-      vectores viven en un ChromaDB local por equipo, asi que los hashes que
-      alimentan el delta indexing describen el indice de UN equipo, no un hecho
-      global. Sin esta columna, el equipo A marcaba los archivos como indexados
-      y el equipo B se saltaba el reindexado creyendolos al dia, sirviendo
-      codigo viejo (o nada) desde su Chroma.
-    - projects.device_indexed_at: cuando indexo CADA equipo, para que
-      list_projects no muestre como reciente el indexado de otra maquina.
-    - project_profiles: cache del perfil de describe_project. Es por dispositivo
-      porque se calcula sobre el Chroma local (mismo motivo que device_paths).
+    Antes las migraciones vivian duplicadas aqui y en el .sql; ahora el .sql es
+    la unica fuente de verdad del schema.
     """
+    sql = (Path(__file__).resolve().parent.parent / "sql" / "schema.sql").read_text(encoding="utf-8")
     with cursor() as cur:
-        cur.execute(
-            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
-            "device_paths JSONB NOT NULL DEFAULT '{}'::jsonb"
-        )
-        cur.execute(
-            "ALTER TABLE projects ADD COLUMN IF NOT EXISTS "
-            "device_indexed_at JSONB NOT NULL DEFAULT '{}'::jsonb"
-        )
-        cur.execute("ALTER TABLE indexed_files ADD COLUMN IF NOT EXISTS device_id TEXT")
-        cur.execute(
-            "CREATE INDEX IF NOT EXISTS idx_indexed_files_device "
-            "ON indexed_files(project_id, device_id)"
-        )
-        cur.execute(
-            """
-            CREATE TABLE IF NOT EXISTS project_profiles (
-                project_id INTEGER NOT NULL REFERENCES projects(id),
-                device_id TEXT NOT NULL,
-                generated_for TEXT,
-                payload JSONB NOT NULL,
-                created_at TIMESTAMP NOT NULL DEFAULT NOW(),
-                PRIMARY KEY (project_id, device_id)
-            )
-            """
-        )
+        cur.execute(sql)
 
 
 def claim_local_paths(device_id: str) -> int:
