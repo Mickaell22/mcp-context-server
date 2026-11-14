@@ -10,40 +10,41 @@
 
 **Indexa tu codebase y busca por similitud semantica; DeepSeek Flash comprime lo relevante antes de que llegue al contexto.**
 <br/>
-**Menos tokens en Claude Code, mismo contexto util. 12 tools MCP, metricas de uso en PostgreSQL.**
+**Menos tokens en Claude Code, mismo contexto util. 13 tools MCP, metricas de uso en PostgreSQL.**
 
 <br/>
 
-<h3>⭐ Dale una estrella si te ahorro tokens.</h3>
+<h3>Dale una estrella si te ahorro tokens.</h3>
 
 [![Stars](https://img.shields.io/github/stars/Mickaell22/mcp-context-server?style=social)](https://github.com/Mickaell22/mcp-context-server)
 
 <br/>
 
-[![12 Tools MCP](https://img.shields.io/badge/12-Tools_MCP-6C5CE7?style=for-the-badge)](#tools-mcp)
+[![13 Tools MCP](https://img.shields.io/badge/13-Tools_MCP-6C5CE7?style=for-the-badge)](#tools-mcp)
 [![Compresion de contexto](https://img.shields.io/badge/Contexto-Comprimido-00B894?style=for-the-badge)](#como-funciona)
 [![Auditoria de codigo](https://img.shields.io/badge/Auditoria-de_codigo-E17055?style=for-the-badge)](#tools-mcp)
+[![Multi-equipo](https://img.shields.io/badge/Multi--equipo-1_Postgres-0984E3?style=for-the-badge)](#multi-dispositivo-misma-postgres-varios-equipos)
 [![Local-first](https://img.shields.io/badge/Local--first-Tailscale-245EFF?style=for-the-badge)](#seguridad)
 
 <br/>
 
-### 🧩 Stack
+<br/>
+
 
 [![Python](https://img.shields.io/badge/Python-3.11+-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![MCP](https://img.shields.io/badge/MCP-SDK-blueviolet?style=for-the-badge&logo=anthropic&logoColor=white)](https://modelcontextprotocol.io)
 [![DeepSeek](https://img.shields.io/badge/DeepSeek-Flash-4D6BFE?style=for-the-badge&logo=deepseek&logoColor=white)](https://platform.deepseek.com)
 [![ChromaDB](https://img.shields.io/badge/ChromaDB-Vectores-FF6B35?style=for-the-badge&logo=databricks&logoColor=white)](https://trychroma.com)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL-Railway-4169E1?style=for-the-badge&logo=postgresql&logoColor=white)](https://railway.com)
-[![Tailscale](https://img.shields.io/badge/Acceso-Tailscale-245EFF?style=for-the-badge&logo=tailscale&logoColor=white)](https://tailscale.com)
 
 <!-- TODO: no hay archivo LICENSE en el repo. Si agregas uno, descomenta el badge:
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg?style=flat-square)](LICENSE) -->
 
 <br/>
 
-[**🚀 Instalacion**](#instalacion) • [**🛠️ Tools MCP**](#tools-mcp) • [**⚙️ Como funciona**](#como-funciona) • [**🧩 Stack**](#stack) • [**🌐 Dashboard**](https://ia.novamicktools.com)
+[**Instalacion**](#instalacion) • [**Tools MCP**](#tools-mcp) • [**Como funciona**](#como-funciona) • [**Stack**](#stack) • [**Dashboard**](https://ia.novamicktools.com)
 
-[**🔧 Config en Claude Code**](#configuracion-en-claude-code) • [**🔑 Variables de entorno**](#variables-de-entorno) • [**🧪 Tests**](#tests-y-evaluación) • [**🔒 Seguridad**](#seguridad)
+[**Config en Claude Code**](#configuracion-en-claude-code) • [**Variables de entorno**](#variables-de-entorno) • [**Multi-equipo**](#multi-dispositivo-misma-postgres-varios-equipos) • [**Tests**](#tests-y-evaluación) • [**Seguridad**](#seguridad)
 
 </div>
 
@@ -96,7 +97,9 @@ DeepSeek Flash API  ────────────────────
 | `describe_project` | `project`, `refresh` (bool), `focus` (str, opcional) | **Reconocimiento antes de escribir codigo**: como esta hecho el proyecto, para que lo nuevo salga igual a lo que ya hay. Devuelve `facts` (MEDIDO del indice, sin LLM: stack y dependencias de los manifiestos, paleta de colores con los tokens `--var` que los nombran, modulos con mas fan-in desde `file_imports`, carpetas y convencion de nombres) y `guide` (una pasada DeepSeek: arquitectura, unidad tipica, flujo de datos, convenciones y **los pasos para agregar una feature siguiendo el patron existente**). El perfil se cachea por dispositivo y se vence solo al re-indexar: la segunda llamada cuesta 0 tokens. `focus` sesga la guia a una zona concreta (esos perfiles no se cachean). |
 | `check_updates` | `project` (opcional), `sync` (bool) | Que proyectos de este equipo quedaron viejos, en los **dos ejes**: el repo respecto a GitHub (`behind`/`ahead`/`dirty`, hace fetch en paralelo) y el indice de Chroma respecto al codigo (`index_stale`). Con `sync=true` los pone al dia: `git pull --ff-only` + re-indexado incremental. El pull **solo** cuando el fast-forward es seguro — con cambios sin commitear o commits sin pushear no toca el repo y explica por que lo salto. El re-indexado si corre igual (es solo lectura). Trabaja sobre **la rama activa de cada repo**, no solo `main`: un proyecto parado en `feature/x` se compara contra `origin/feature/x`. Una rama local sin upstream se reporta como "no comparable" (no como "al dia") sugiriendo `git push -u origin <rama>`. |
 | `check_server_version` | `update` (bool) | Version del **propio servidor MCP** frente a GitHub (no confundir con `check_updates`, que mira los proyectos indexados). Sin argumentos dice que commit corre este equipo y lista los commits nuevos del remoto. Con `update=true` hace `git pull --ff-only` del repo del server y, solo si el commit nuevo toco `requirements.txt`, reinstala las dependencias en su venv. **Nunca se reinicia solo**: despues hay que reiniciar Claude Code, porque el proceso vivo sigue con el codigo que ya cargo en memoria. Si el repo tiene cambios sin commitear, aborta antes del pull. |
-| `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. |
+| `find_usages` | `project`, `symbol` | Busca que archivos importan un simbolo o modulo especifico. Lee el grafo de imports de Postgres, asi que responde desde cualquier equipo. |
+| `index_status` | `project` (opcional) | Avance de los indexados, audits y describes en curso: porcentaje, fase, tiempo, `idle_s` (segundos sin avance) y ETA. Responde al instante aunque haya un trabajo largo corriendo. |
+| `delete_project` | `project` | Borra el indice y el registro de un proyecto (chunks de Chroma, filas de Postgres, whitelist). **Nunca** toca los archivos en disco. Irreversible y afecta a todos los equipos que comparten la base. |
 
 ---
 
@@ -127,10 +130,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Copia `.env.example` a `.env` y completa las variables:
+Copia `.env.example` (en la raiz del repo) a `server/.env` y completa las variables:
 
 ```bash
-cp .env.example .env
+cp ../.env.example .env
 ```
 
 Aplica el schema en tu PostgreSQL de Railway (solo la primera vez):
@@ -145,10 +148,10 @@ Levanta el servidor:
 .venv/bin/python main.py
 ```
 
-### Paths en openclaw-server
+### Estructura del server
 
 ```
-/home/mickaell/Escritorio/Proyectos MICKAELL/mcp-context-server/
+mcp-context-server/
 └── server/
     ├── main.py              # Entry point
     ├── tools/                    # Tools MCP
@@ -220,6 +223,12 @@ sudo systemctl start mcp-context
 | `DEVICE_ID` | Identificador de este equipo (ej. `desktop`, `laptop`). Como varios dispositivos comparten la misma Postgres, cada proyecto guarda una ruta local por dispositivo (`projects.device_paths`). Si se omite, se usa el hostname. Ver "Multi-dispositivo" abajo. |
 | `PROJECTS_BASE_PATH` | Directorio base donde se clonan los repos |
 | `CHROMA_PERSIST_PATH` | Directorio donde ChromaDB guarda los vectores en disco |
+
+<details>
+<summary><b>Variables opcionales (todas con default)</b></summary>
+
+| Variable | Descripcion |
+|---|---|
 | `LOG_LEVEL` | Nivel de log — `INFO` por defecto |
 | `MAX_DISTANCE` | Umbral de distancia coseno para filtrar chunks (default: `1.2`). Con `all-MiniLM-L6-v2`, queries en lenguaje natural contra codigo suelen dar distancias de 0.6–1.1; valores menores a 1.0 filtran demasiado y devuelven contexto vacio. |
 | `DEEPSEEK_MODEL` | Modelo de DeepSeek (default: `deepseek-flash`, V4.1-Flash; el otro es `deepseek-v4-pro`. `deepseek-v4-flash` esta retirado y DeepSeek lo redirige a `deepseek-flash`). DeepSeek retira nombres viejos sin avisar y la API devuelve **400**: `deepseek-chat` ya no existe. Un 400 aqui NO rompe la tool — cae al fallback de chunks crudos con `total_tokens: 0` y `summary` vacio, que se parece a una auditoria limpia. Si un `audit_project` sale sospechosamente vacio, revisa `total_tokens` antes de creerle. |
@@ -237,6 +246,8 @@ sudo systemctl start mcp-context
 | `PROFILE_MAX_TOKENS` | Presupuesto de salida de `describe_project` (default: `12000`). Necesita mas que `DEEPSEEK_MAX_TOKENS` porque el perfil son 5 secciones de prosa **y** el modelo razona antes de escribir: con 4096 gastaba todo el presupuesto en el bloque `thinking` y devolvia una respuesta sin texto. |
 | `RERANK_ENABLED` | Activa el reranking híbrido semántico+léxico post-retrieval (default: `true`). `false` lo desactiva. |
 | `RERANK_CANDIDATE_MULT` / `RERANK_W_SEM` / `RERANK_W_LEX` | Tamaño del pool de candidatos (`top_k × mult`, default 3) y pesos del score (default 0.7 semántico / 0.3 léxico). |
+
+</details>
 
 Las variables criticas (`DEEPSEEK_API_KEY`, `DATABASE_URL`, `PROJECTS_BASE_PATH`, `CHROMA_PERSIST_PATH`) son validadas al arrancar el servidor: si falta alguna, el proceso falla con un `RuntimeError` que indica exactamente cual variable falta.
 
@@ -350,8 +361,10 @@ Junto a la Capa 1 corren los tests de las demás piezas, todos offline: `test_au
 
 ## Seguridad
 
-- Solo opera dentro de rutas explicitamente permitidas (whitelist dinamica desde PostgreSQL)
-- Bloquea archivos sensibles: `.env`, `.pem`, `.key`, `secrets.json`, `CLAUDE.md`, etc.
-- Extensiones indexadas: `.py .js .ts .jsx .tsx .java .go .rs .dart .kt .swift .rb .php .c .cpp .h .html .css .scss .md .json .yaml .sql .sh`
-- No ejecuta ningun comando del sistema — unica excepcion es `git clone` via GitPython
-- No expuesto a internet — acceso local o via Tailscale
+- **Solo lectura sobre tus proyectos**: indexar y auditar leen los archivos en su sitio; el unico lugar donde el server escribe es `PROJECTS_BASE_PATH`, al clonar.
+- Solo opera dentro de rutas permitidas (whitelist cargada desde PostgreSQL al arrancar).
+- Bloquea archivos sensibles (`.env`, `.pem`, `.key`, `secrets.json`, `credentials.json`, `CLAUDE.md`...), lockfiles, minificados y todo lo que ignore el `.gitignore` del proyecto.
+- Extensiones indexadas: `.py .js .ts .jsx .tsx .java .cs .go .rs .dart .kt .swift .rb .php .c .h .cpp .hpp .html .css .scss .sass .md .txt .json .yaml .yml .sql .sh .bash`
+- Comandos que ejecuta: solo git via GitPython (`clone`, `fetch`, `ls-files`, y `pull --ff-only` bajo `check_updates(sync=true)` o la auto-actualizacion). Unica excepcion: `pip install -r requirements.txt` en su propio venv, solo con `check_server_version(update=true)` y solo si el commit nuevo toco `requirements.txt`.
+- El token de GitHub nunca se escribe en `.git/config`: viaja en memoria durante la llamada y se redacta de cualquier mensaje de error.
+- No expuesto a internet: acceso local o via Tailscale.
