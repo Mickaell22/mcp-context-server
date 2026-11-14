@@ -1,0 +1,58 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="560" viewBox="0 0 1000 560" role="img" aria-label="Las 13 tools en 4 grupos: Consultar, Indexar, Auditar y Mantener">
+  <rect x="1" y="1" width="998" height="558" rx="22" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+  <g font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+
+    <!-- Consultar -->
+    <g transform="translate(30 30)">
+      <rect width="455" height="235" rx="16" fill="#161b22" stroke="#6C5CE7" stroke-width="2"/>
+      <text x="24" y="48" fill="#a29bfe" font-size="22" font-weight="700">Consultar</text>
+      <text x="24" y="72" fill="#8b949e" font-size="14">entender el codigo sin leerlo entero</text>
+      <g font-size="14">
+        <text x="24" y="110"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">query_context</tspan><tspan fill="#8b949e">  pregunta y recibe el resumen</tspan></text>
+        <text x="24" y="140"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">describe_project</tspan><tspan fill="#8b949e">  stack, patrones y paleta</tspan></text>
+        <text x="24" y="170"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">find_usages</tspan><tspan fill="#8b949e">  quien importa este simbolo</tspan></text>
+        <text x="24" y="200"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">get_file</tspan><tspan fill="#8b949e">  un archivo completo del indice</tspan></text>
+      </g>
+    </g>
+
+    <!-- Indexar -->
+    <g transform="translate(515 30)">
+      <rect width="455" height="235" rx="16" fill="#161b22" stroke="#00B894" stroke-width="2"/>
+      <text x="24" y="48" fill="#3fdd78" font-size="22" font-weight="700">Indexar</text>
+      <text x="24" y="72" fill="#8b949e" font-size="14">solo lectura: nunca modifica tus archivos</text>
+      <g font-size="14">
+        <text x="24" y="110"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">register_project</tspan><tspan fill="#8b949e">  un repo que ya tienes</tspan></text>
+        <text x="24" y="140"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">clone_project</tspan><tspan fill="#8b949e">  clona de GitHub e indexa</tspan></text>
+        <text x="24" y="170"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">index_project</tspan><tspan fill="#8b949e">  re-indexa solo lo que cambio</tspan></text>
+        <text x="24" y="200"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">index_status</tspan><tspan fill="#8b949e">  avance y tiempo restante</tspan></text>
+      </g>
+    </g>
+
+    <!-- Auditar -->
+    <g transform="translate(30 295)">
+      <rect width="455" height="235" rx="16" fill="#161b22" stroke="#E17055" stroke-width="2"/>
+      <text x="24" y="48" fill="#ff9f80" font-size="22" font-weight="700">Auditar</text>
+      <text x="24" y="72" fill="#8b949e" font-size="14">revision de codigo con citas archivo:linea</text>
+      <g font-size="14">
+        <text x="24" y="110"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">audit_project</tspan></text>
+        <text x="24" y="140" fill="#c9d1d9">bugs de logica, seguridad, rendimiento,</text>
+        <text x="24" y="162" fill="#c9d1d9">accesibilidad y complejidad innecesaria</text>
+        <text x="24" y="192" fill="#8b949e">contrato front-back entre dos repos y una</text>
+        <text x="24" y="214" fill="#8b949e">segunda pasada que descarta falsos positivos</text>
+      </g>
+    </g>
+
+    <!-- Mantener -->
+    <g transform="translate(515 295)">
+      <rect width="455" height="235" rx="16" fill="#161b22" stroke="#0984E3" stroke-width="2"/>
+      <text x="24" y="48" fill="#74b9ff" font-size="22" font-weight="700">Mantener</text>
+      <text x="24" y="72" fill="#8b949e" font-size="14">todo al dia, en uno o varios equipos</text>
+      <g font-size="14">
+        <text x="24" y="110"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">list_projects</tspan><tspan fill="#8b949e">  que hay y que esta viejo</tspan></text>
+        <text x="24" y="140"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">check_updates</tspan><tspan fill="#8b949e">  repos detras de GitHub</tspan></text>
+        <text x="24" y="170"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">check_server_version</tspan><tspan fill="#8b949e">  actualiza el server</tspan></text>
+        <text x="24" y="200"><tspan fill="#e6edf3" font-family="'DejaVu Sans Mono',Consolas,monospace">delete_project</tspan><tspan fill="#8b949e">  borra el indice, no tus archivos</tspan></text>
+      </g>
+    </g>
+  </g>
+</svg>

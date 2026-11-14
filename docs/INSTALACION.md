@@ -167,3 +167,36 @@ Nada se pierde; los datos son los mismos:
 3. Cambiar `DATABASE_URL` en `server/.env` y reiniciar Claude Code.
 4. En cada equipo nuevo: Pasos 3, 5 (con su propio `DEVICE_ID`) y 6, y despues
    `register_project` con la ruta local de cada proyecto que quiera consultar.
+
+---
+
+## Anexo: instalacion como servicio (systemd)
+
+Para que arranque automaticamente en openclaw-server:
+
+```ini
+# /etc/systemd/system/mcp-context.service
+[Unit]
+Description=MCP Context Server
+After=network.target
+
+[Service]
+User=mickaell
+WorkingDirectory=/ruta/a/mcp-context-server/server
+ExecStart=/ruta/a/server/.venv/bin/python main.py
+Restart=on-failure
+EnvironmentFile=/ruta/a/server/.env
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable mcp-context
+sudo systemctl start mcp-context
+```
+
+
+---
+
+[Volver al README](../README.md)

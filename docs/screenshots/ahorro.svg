@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1000" height="250" viewBox="0 0 1000 250" role="img" aria-label="Consulta real: leer los 4 archivos completos son unos 12100 tokens; la respuesta de mcp-context son unos 770 tokens, unas 16 veces menos">
+  <!-- Medicion real (2026-11-14), query_context sobre este repo:
+       "como se calcula el costo en dolares de cada llamada a DeepSeek segun la hora".
+       Archivos citados: 48484 chars (~12121 tokens). Respuesta: 3070 chars (~767 tokens).
+       Tokens estimados como caracteres/4. Barras: 640px = 12121 tokens. -->
+  <rect x="1" y="1" width="998" height="248" rx="22" fill="#0d1117" stroke="#30363d" stroke-width="2"/>
+  <g font-family="'Segoe UI',Helvetica,Arial,sans-serif">
+    <text x="40" y="52" fill="#e6edf3" font-size="18" font-weight="700">Contexto que entra a Claude Code para responder la misma pregunta</text>
+
+    <text x="40" y="100" fill="#c9d1d9" font-size="15">Leer los archivos enteros</text>
+    <rect x="270" y="82" width="640" height="26" rx="6" fill="#E17055"/>
+    <text x="910" y="128" text-anchor="end" fill="#E17055" font-size="15" font-weight="700">≈ 12.100 tokens · 4 archivos</text>
+
+    <text x="40" y="168" fill="#c9d1d9" font-size="15">Con mcp-context</text>
+    <rect x="270" y="150" width="41" height="26" rx="6" fill="#3fdd78"/>
+    <text x="324" y="169" fill="#3fdd78" font-size="15" font-weight="700">≈ 770 tokens · con archivo:linea  →  unas 16 veces menos</text>
+
+    <text x="40" y="222" fill="#8b949e" font-size="13">Una consulta real sobre este repo. Tokens estimados como caracteres/4; el resumen lo hace DeepSeek, que cuesta una fraccion de centavo.</text>
+  </g>
+</svg>

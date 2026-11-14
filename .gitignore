@@ -1,8 +1,8 @@
 # MD del proyecto (documentacion interna)
 *.md
 !README.md
-# Guia publica de instalacion: el README la enlaza.
-!docs/INSTALACION.md
+# Docs publicas enlazadas desde el README.
+!docs/*.md
 # CLAUDE.md se versiona a proposito: es la memoria de decisiones del repo y se
 # edita desde varios equipos; sin trackearlo, cada maquina tiene su copia y los
 # gotchas escritos en una se pierden para las demas.
