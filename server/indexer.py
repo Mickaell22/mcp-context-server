@@ -407,6 +407,17 @@ def index_project(
     progress(1.0, "Leyendo archivos")
 
     existing_hashes: dict[str, str] = db.get_file_hashes(project_id) if incremental else {}
+    if existing_hashes:
+        # Los hashes viven en Postgres y los vectores en el Chroma local: pueden
+        # divergir (caso real: migrar el equipo de Kali a NixOS con el mismo
+        # DEVICE_ID dejo 8 de 57 archivos en Chroma y el incremental respondia
+        # "49 sin cambios"). Un hash solo cuenta si el archivo tiene chunks aqui;
+        # si no, se re-indexa como nuevo. Una sola consulta de metadatos.
+        present = {
+            m["file_path"]
+            for m in collection.get(where={"project_id": project_id}, include=["metadatas"])["metadatas"]
+        }
+        existing_hashes = {p: h for p, h in existing_hashes.items() if p in present}
 
     if not incremental:
         collection.delete(where={"project_id": project_id})
